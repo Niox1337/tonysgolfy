@@ -46,10 +46,14 @@ type SpreadsheetUtils = {
     sheet: SpreadsheetSheet,
     options: { defval: string },
   ) => Record<string, string | number | boolean | null>[]
+  json_to_sheet: (rows: Record<string, string | number>[]) => SpreadsheetSheet
+  book_new: () => SpreadsheetBook
+  book_append_sheet: (workbook: SpreadsheetBook, sheet: SpreadsheetSheet, name: string) => void
 }
 
 type SpreadsheetReader = {
   read: (data: ArrayBuffer, options: { type: 'array' }) => SpreadsheetBook
+  writeFile: (workbook: SpreadsheetBook, filename: string) => void
   utils: SpreadsheetUtils
 }
 
@@ -189,7 +193,7 @@ function App() {
   const [importAudits, setImportAudits] = useState<ImportAudit[]>([])
   const [duplicatePreview, setDuplicatePreview] = useState<DuplicatePreviewMatch[]>([])
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([])
-  const [importMessage, setImportMessage] = useState('导入球场攻略 CSV 或 Excel，批量建立旅行资料库。')
+  const [importMessage, setImportMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isGeneratingGuide, setIsGeneratingGuide] = useState(false)
@@ -467,6 +471,35 @@ function App() {
     }
   }
 
+  function handleExportExcel() {
+    try {
+      setErrorMessage('')
+
+      if (!window.XLSX) {
+        throw new Error('Excel 导出组件尚未就绪，请刷新页面后重试。')
+      }
+
+      const workbook = window.XLSX.utils.book_new()
+      const rows = records.map((record) => ({
+        courseName: record.courseName,
+        region: record.region,
+        courseCode: record.courseCode,
+        greenFee: record.greenFee,
+        bestSeason: record.bestSeason,
+        notes: record.notes,
+        updatedAt: record.updatedAt,
+      }))
+      const sheet = window.XLSX.utils.json_to_sheet(rows)
+      window.XLSX.utils.book_append_sheet(workbook, sheet, 'Guides')
+      window.XLSX.writeFile(
+        workbook,
+        `tonysgolfy-guides-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      )
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '导出 Excel 失败。')
+    }
+  }
+
   async function handleGenerateGuide() {
     try {
       setIsGeneratingGuide(true)
@@ -572,7 +605,10 @@ function App() {
               <input type="file" accept=".csv,.xlsx,.xls" onChange={handleImport} />
             </label>
             <button className="ghost" type="button" onClick={handleExport}>
-              导出攻略库
+              导出 CSV
+            </button>
+            <button className="ghost" type="button" onClick={handleExportExcel}>
+              导出 Excel
             </button>
           </div>
 

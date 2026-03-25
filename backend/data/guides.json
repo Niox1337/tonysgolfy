@@ -1,0 +1,42 @@
+[
+  {
+    "id": "5281f205-06a6-45a8-8b0c-4086ed389176",
+    "courseName": "Mission Hills Blackstone",
+    "region": "Shenzhen, China",
+    "courseCode": "CN-SZX-BLK",
+    "greenFee": 2380,
+    "bestSeason": "October to December",
+    "notes": "适合安排 2 天游玩，球场维护优秀，建议住度假酒店。",
+    "updatedAt": "2026-03-25T10:40:11.456623+00:00"
+  },
+  {
+    "id": "54ec64a2-0d86-48bb-9b60-eed56e15354e",
+    "courseName": "Sentosa Serapong",
+    "region": "Singapore",
+    "courseCode": "SG-SEN-SRP",
+    "greenFee": 3100,
+    "bestSeason": "February to April",
+    "notes": "适合城市高尔夫短途，夜间餐厅选择多，机场交通方便。",
+    "updatedAt": "2026-03-25T10:40:11.456623+00:00"
+  },
+  {
+    "id": "0d0e3acc-5d9f-40fc-99d0-5faa743abff3",
+    "courseName": "Cape Kidnappers",
+    "region": "Hawke’s Bay, New Zealand",
+    "courseCode": "NZ-HKB-CPK",
+    "greenFee": 4200,
+    "bestSeason": "November to March",
+    "notes": "悬崖海景极强，适合做高端目的地专题，建议自驾。",
+    "updatedAt": "2026-03-25T10:40:11.456623+00:00"
+  },
+  {
+    "id": "6bc1c6b6-b119-4f02-834a-c71ab9c992aa",
+    "courseName": "Mission Hills Blackstone",
+    "region": "Shenzhen, China",
+    "courseCode": "CN-SZX-BLK",
+    "greenFee": 2280,
+    "bestSeason": "October to December",
+    "notes": "重复样例，用于演示球场攻略去重审计。",
+    "updatedAt": "2026-03-25T10:40:11.456623+00:00"
+  }
+]
