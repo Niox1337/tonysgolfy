@@ -1,36 +1,29 @@
-import { startTransition, useEffect, useMemo, useState } from 'react'
+import { startTransition, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
+import {
+  createGuide,
+  deleteGuides,
+  downloadGuidesCsv,
+  generateGuide,
+  importGuides,
+  listDuplicateGroups,
+  listGuides,
+  previewDuplicates,
+  updateGuide,
+} from './api'
+import type {
+  DuplicateGroup,
+  DuplicatePreviewMatch,
+  GuideInput,
+  GuideRecord,
+  ImportAudit,
+  SearchMode,
+  SortMode,
+} from './api'
 import './App.css'
 
 type ThemeMode = 'day' | 'night'
-type SearchMode = 'keyword' | 'semantic'
 type RegionFilter = 'all' | string
-type SortMode = 'updated-desc' | 'updated-asc' | 'fee-desc' | 'fee-asc' | 'name-asc'
-
-type GuideRecord = {
-  id: string
-  courseName: string
-  region: string
-  courseCode: string
-  greenFee: number
-  bestSeason: string
-  notes: string
-  updatedAt: string
-}
-
-type ImportAudit = {
-  id: string
-  courseName: string
-  courseCode: string
-  region: string
-  exactMatches: number
-  similarMatches: number
-}
-
-type DuplicateGroup = {
-  key: string
-  items: GuideRecord[]
-}
 
 type FormState = {
   courseName: string
@@ -66,7 +59,6 @@ declare global {
   }
 }
 
-const STORAGE_KEY = 'tonysgolfy-guide-records'
 const THEME_KEY = 'tonysgolfy-theme'
 
 const initialForm: FormState = {
@@ -78,113 +70,17 @@ const initialForm: FormState = {
   notes: '',
 }
 
-const seedRecords: GuideRecord[] = [
-  {
-    id: crypto.randomUUID(),
-    courseName: 'Mission Hills Blackstone',
-    region: 'Shenzhen, China',
-    courseCode: 'CN-SZX-BLK',
-    greenFee: 2380,
-    bestSeason: 'October to December',
-    notes: '适合安排 2 天游玩，球场维护优秀，建议住度假酒店。',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: crypto.randomUUID(),
-    courseName: 'Sentosa Serapong',
-    region: 'Singapore',
-    courseCode: 'SG-SEN-SRP',
-    greenFee: 3100,
-    bestSeason: 'February to April',
-    notes: '适合城市高尔夫短途，夜间餐厅选择多，机场交通方便。',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: crypto.randomUUID(),
-    courseName: 'Cape Kidnappers',
-    region: 'Hawke’s Bay, New Zealand',
-    courseCode: 'NZ-HKB-CPK',
-    greenFee: 4200,
-    bestSeason: 'November to March',
-    notes: '悬崖海景极强，适合做高端目的地专题，建议自驾。',
-    updatedAt: new Date().toISOString(),
-  },
-  {
-    id: crypto.randomUUID(),
-    courseName: 'Mission Hills Blackstone',
-    region: 'Shenzhen, China',
-    courseCode: 'CN-SZX-BLK',
-    greenFee: 2280,
-    bestSeason: 'October to December',
-    notes: '重复样例，用于演示球场攻略去重审计。',
-    updatedAt: new Date().toISOString(),
-  },
-]
+const emptyGuideMessage =
+  '输入你的旅行偏好，例如“海景球场、适合 3 天行程、预算 3000 内”，然后点击生成。'
 
-function normalizeValue(value: string) {
-  return value.trim().toLowerCase()
-}
-
-function buildFingerprint(item: Pick<GuideRecord, 'courseName' | 'region' | 'courseCode'>) {
-  return [item.courseName, item.region, item.courseCode].map(normalizeValue).join('::')
-}
-
-function scoreSimilarity(
-  left: Pick<GuideRecord, 'courseName' | 'region' | 'courseCode' | 'bestSeason' | 'notes'>,
-  right: Pick<GuideRecord, 'courseName' | 'region' | 'courseCode' | 'bestSeason' | 'notes'>,
-) {
-  let score = 0
-  if (normalizeValue(left.courseName) === normalizeValue(right.courseName)) score += 0.4
-  if (normalizeValue(left.courseCode) === normalizeValue(right.courseCode)) score += 0.25
-  if (normalizeValue(left.region) === normalizeValue(right.region)) score += 0.15
-  if (normalizeValue(left.bestSeason) === normalizeValue(right.bestSeason)) score += 0.1
-  if (normalizeValue(left.notes) && normalizeValue(right.notes) && normalizeValue(left.notes) === normalizeValue(right.notes)) {
-    score += 0.1
-  }
-  return score
-}
-
-function semanticScore(record: GuideRecord, query: string) {
-  const terms = normalizeValue(query)
-    .split(/\s+/)
-    .filter(Boolean)
-
-  if (terms.length === 0) return 1
-
-  const haystacks = {
-    courseName: normalizeValue(record.courseName),
-    region: normalizeValue(record.region),
-    courseCode: normalizeValue(record.courseCode),
-    bestSeason: normalizeValue(record.bestSeason),
-    notes: normalizeValue(record.notes),
-  }
-
-  let score = 0
-
-  terms.forEach((term) => {
-    if (haystacks.courseName.includes(term)) score += 0.35
-    if (haystacks.region.includes(term)) score += 0.25
-    if (haystacks.courseCode.includes(term)) score += 0.15
-    if (haystacks.bestSeason.includes(term)) score += 0.15
-    if (haystacks.notes.includes(term)) score += 0.1
-    if (term === '海景' && (haystacks.notes.includes('海') || haystacks.notes.includes('悬崖'))) score += 0.35
-    if (term === '度假' && (haystacks.notes.includes('酒店') || haystacks.notes.includes('度假'))) score += 0.35
-    if (term === '短途' && (haystacks.region.includes('singapore') || haystacks.notes.includes('机场'))) score += 0.35
-  })
-
-  return score / terms.length
-}
-
-function toRecord(form: FormState): GuideRecord {
+function toGuideInput(form: FormState): GuideInput {
   return {
-    id: crypto.randomUUID(),
     courseName: form.courseName.trim(),
     region: form.region.trim(),
     courseCode: form.courseCode.trim(),
     greenFee: Number(form.greenFee) || 0,
     bestSeason: form.bestSeason.trim(),
     notes: form.notes.trim(),
-    updatedAt: new Date().toISOString(),
   }
 }
 
@@ -197,6 +93,10 @@ function toFormState(record: GuideRecord): FormState {
     bestSeason: record.bestSeason,
     notes: record.notes,
   }
+}
+
+function loadTheme() {
+  return localStorage.getItem(THEME_KEY) === 'night' ? 'night' : 'day'
 }
 
 function parseCsv(text: string) {
@@ -244,7 +144,7 @@ function parseCsv(text: string) {
 }
 
 function mapHeader(value: string) {
-  const key = normalizeValue(value).replaceAll(/[\s_-]+/g, '')
+  const key = value.trim().toLowerCase().replaceAll(/[\s_-]+/g, '')
   if (['coursename', 'course', 'name', 'title'].includes(key)) return 'courseName'
   if (['region', 'city', 'country', 'destination'].includes(key)) return 'region'
   if (['coursecode', 'code', 'sku', 'courseid'].includes(key)) return 'courseCode'
@@ -254,7 +154,7 @@ function mapHeader(value: string) {
   return null
 }
 
-function convertRowsToRecords(rows: Record<string, string | number | boolean | null>[]) {
+function convertRowsToGuideInputs(rows: Record<string, string | number | boolean | null>[]) {
   return rows
     .map((row) => {
       const draft: FormState = { ...initialForm }
@@ -266,75 +166,15 @@ function convertRowsToRecords(rows: Record<string, string | number | boolean | n
       })
 
       if (!draft.courseName.trim() && !draft.courseCode.trim()) return null
-      return toRecord(draft)
+      return toGuideInput(draft)
     })
-    .filter((item): item is GuideRecord => item !== null)
-}
-
-function getCsvExport(records: GuideRecord[]) {
-  const headers = ['courseName', 'region', 'courseCode', 'greenFee', 'bestSeason', 'notes', 'updatedAt']
-  const escape = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`
-  const lines = records.map((record) =>
-    [
-      record.courseName,
-      record.region,
-      record.courseCode,
-      record.greenFee,
-      record.bestSeason,
-      record.notes,
-      record.updatedAt,
-    ]
-      .map(escape)
-      .join(','),
-  )
-
-  return [headers.join(','), ...lines].join('\n')
-}
-
-function loadInitialRecords() {
-  const stored = localStorage.getItem(STORAGE_KEY)
-  if (!stored) return seedRecords
-
-  try {
-    const parsed = JSON.parse(stored) as GuideRecord[]
-    return parsed.length > 0 ? parsed : seedRecords
-  } catch {
-    return seedRecords
-  }
-}
-
-function loadTheme() {
-  return localStorage.getItem(THEME_KEY) === 'night' ? 'night' : 'day'
-}
-
-function buildTravelGuide(prompt: string, records: GuideRecord[]) {
-  if (!prompt.trim()) {
-    return '输入你的旅行偏好，例如“海景球场、适合 3 天行程、预算 3000 内”，系统会基于当前球场库生成一段攻略建议。'
-  }
-
-  const ranked = [...records]
-    .map((record) => ({ record, score: semanticScore(record, prompt) }))
-    .filter((entry) => entry.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 3)
-
-  if (ranked.length === 0) {
-    return `没有在当前库里找到和“${prompt}”高度相关的球场。可以先补充更多目的地资料，再重新生成攻略。`
-  }
-
-  const picks = ranked
-    .map(
-      ({ record }, index) =>
-        `${index + 1}. ${record.courseName}，位于 ${record.region}，参考果岭费约 ¥${record.greenFee}，建议季节为 ${record.bestSeason || '待补充'}。${record.notes}`,
-    )
-    .join('\n')
-
-  return `根据“${prompt}”，建议优先关注以下球场：\n${picks}\n\n行程建议：优先选择同一地区或航班直达的组合，先确认 tee time，再根据旺季情况安排酒店与交通。`
+    .filter((guide): guide is GuideInput => guide !== null)
 }
 
 function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme())
-  const [records, setRecords] = useState<GuideRecord[]>(() => loadInitialRecords())
+  const [records, setRecords] = useState<GuideRecord[]>([])
+  const [allRecords, setAllRecords] = useState<GuideRecord[]>([])
   const [form, setForm] = useState<FormState>(initialForm)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -345,9 +185,17 @@ function App() {
   const [regionFilter, setRegionFilter] = useState<RegionFilter>('all')
   const [sortMode, setSortMode] = useState<SortMode>('updated-desc')
   const [guidePrompt, setGuidePrompt] = useState('')
+  const [generatedGuide, setGeneratedGuide] = useState(emptyGuideMessage)
   const [importAudits, setImportAudits] = useState<ImportAudit[]>([])
+  const [duplicatePreview, setDuplicatePreview] = useState<DuplicatePreviewMatch[]>([])
+  const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([])
   const [importMessage, setImportMessage] = useState('导入球场攻略 CSV 或 Excel，批量建立旅行资料库。')
   const [errorMessage, setErrorMessage] = useState('')
+  const [isLoading, setIsLoading] = useState(true)
+  const [isGeneratingGuide, setIsGeneratingGuide] = useState(false)
+  const [reloadToken, setReloadToken] = useState(0)
+
+  const deferredSearchTerm = useDeferredValue(searchTerm)
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -355,105 +203,114 @@ function App() {
   }, [theme])
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(records))
-  }, [records])
+    let cancelled = false
+
+    async function loadReferenceData() {
+      try {
+        const [guidesResponse, groupsResponse] = await Promise.all([
+          listGuides(),
+          listDuplicateGroups(),
+        ])
+
+        if (cancelled) return
+
+        setAllRecords(guidesResponse.guides)
+        setDuplicateGroups(groupsResponse)
+        setSelectedIds((current) =>
+          current.filter((id) => guidesResponse.guides.some((record) => record.id === id)),
+        )
+      } catch (error) {
+        if (cancelled) return
+        setErrorMessage(error instanceof Error ? error.message : '加载球场数据失败。')
+      }
+    }
+
+    loadReferenceData()
+
+    return () => {
+      cancelled = true
+    }
+  }, [reloadToken])
 
   useEffect(() => {
-    if (!activeId && records.length > 0) setActiveId(records[0].id)
-    if (activeId && !records.some((record) => record.id === activeId)) {
-      setActiveId(records[0]?.id ?? null)
+    let cancelled = false
+
+    async function loadVisibleGuides() {
+      setIsLoading(true)
+
+      try {
+        const response = await listGuides({
+          search: deferredSearchTerm,
+          searchMode,
+          region: regionFilter,
+          sort: sortMode,
+        })
+
+        if (cancelled) return
+        setRecords(response.guides)
+      } catch (error) {
+        if (cancelled) return
+        setErrorMessage(error instanceof Error ? error.message : '加载列表失败。')
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
     }
-  }, [activeId, records])
+
+    loadVisibleGuides()
+
+    return () => {
+      cancelled = true
+    }
+  }, [deferredSearchTerm, regionFilter, reloadToken, searchMode, sortMode])
+
+  useEffect(() => {
+    if (!activeId && allRecords.length > 0) {
+      setActiveId(allRecords[0].id)
+      return
+    }
+
+    if (activeId && !allRecords.some((record) => record.id === activeId)) {
+      setActiveId(allRecords[0]?.id ?? null)
+    }
+  }, [activeId, allRecords])
+
+  useEffect(() => {
+    if (!form.courseName.trim() || !form.courseCode.trim()) {
+      setDuplicatePreview([])
+      return
+    }
+
+    let cancelled = false
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const preview = await previewDuplicates(toGuideInput(form))
+        if (!cancelled) setDuplicatePreview(preview)
+      } catch (error) {
+        if (!cancelled) {
+          setErrorMessage(error instanceof Error ? error.message : '重复检查失败。')
+        }
+      }
+    }, 250)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timeoutId)
+    }
+  }, [form])
 
   const activeRecord = useMemo(
-    () => records.find((record) => record.id === activeId) ?? null,
-    [activeId, records],
+    () => allRecords.find((record) => record.id === activeId) ?? null,
+    [activeId, allRecords],
   )
-
-  const pendingRecord = useMemo(() => toRecord(form), [form])
-
-  const duplicatePreview = useMemo(() => {
-    const fingerprint = buildFingerprint(pendingRecord)
-    return records
-      .map((record) => ({
-        record,
-        exact: buildFingerprint(record) === fingerprint,
-        score: scoreSimilarity(record, pendingRecord),
-      }))
-      .filter((entry) => entry.exact || entry.score >= 0.45)
-      .sort((left, right) => Number(right.exact) - Number(left.exact) || right.score - left.score)
-      .slice(0, 5)
-  }, [pendingRecord, records])
-
-  const duplicateGroups = useMemo<DuplicateGroup[]>(() => {
-    const groups = new Map<string, GuideRecord[]>()
-
-    records.forEach((record) => {
-      const key = buildFingerprint(record)
-      const list = groups.get(key) ?? []
-      list.push(record)
-      groups.set(key, list)
-    })
-
-    return [...groups.entries()]
-      .filter(([, items]) => items.length > 1)
-      .map(([key, items]) => ({ key, items }))
-      .sort((left, right) => right.items.length - left.items.length)
-  }, [records])
 
   const regionOptions = useMemo(
-    () => ['all', ...new Set(records.map((record) => record.region).filter(Boolean))],
-    [records],
+    () => ['all', ...new Set(allRecords.map((record) => record.region).filter(Boolean))],
+    [allRecords],
   )
 
-  const visibleRecords = useMemo(() => {
-    let next = [...records]
-
-    if (regionFilter !== 'all') {
-      next = next.filter((record) => record.region === regionFilter)
-    }
-
-    if (searchTerm.trim()) {
-      const query = searchTerm.trim()
-      if (searchMode === 'keyword') {
-        const normalized = normalizeValue(query)
-        next = next.filter((record) =>
-          [record.courseName, record.region, record.courseCode, record.bestSeason, record.notes]
-            .map(normalizeValue)
-            .some((value) => value.includes(normalized)),
-        )
-      } else {
-        next = next
-          .map((record) => ({ record, score: semanticScore(record, query) }))
-          .filter((entry) => entry.score >= 0.22)
-          .sort((left, right) => right.score - left.score)
-          .map((entry) => entry.record)
-      }
-    }
-
-    next.sort((left, right) => {
-      switch (sortMode) {
-        case 'updated-asc':
-          return left.updatedAt.localeCompare(right.updatedAt)
-        case 'fee-desc':
-          return right.greenFee - left.greenFee
-        case 'fee-asc':
-          return left.greenFee - right.greenFee
-        case 'name-asc':
-          return left.courseName.localeCompare(right.courseName)
-        case 'updated-desc':
-        default:
-          return right.updatedAt.localeCompare(left.updatedAt)
-      }
-    })
-
-    return next
-  }, [records, regionFilter, searchMode, searchTerm, sortMode])
-
   const allVisibleSelected =
-    visibleRecords.length > 0 && visibleRecords.every((record) => selectedIds.includes(record.id))
-  const featuredCount = new Set(records.map((record) => normalizeValue(record.region))).size
-  const generatedGuide = useMemo(() => buildTravelGuide(guidePrompt, visibleRecords), [guidePrompt, visibleRecords])
+    records.length > 0 && records.every((record) => selectedIds.includes(record.id))
+  const featuredCount = new Set(allRecords.map((record) => record.region.trim().toLowerCase())).size
 
   function updateForm<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((current) => ({ ...current, [key]: value }))
@@ -463,20 +320,27 @@ function App() {
     setEditingForm((current) => ({ ...current, [key]: value }))
   }
 
-  function handleAddItem() {
+  async function refreshData() {
+    startTransition(() => {
+      setReloadToken((current) => current + 1)
+    })
+  }
+
+  async function handleAddItem() {
     if (!form.courseName.trim() || !form.courseCode.trim()) {
       setErrorMessage('至少需要填写球场名称和球场代号。')
       return
     }
 
-    setErrorMessage('')
-
-    startTransition(() => {
-      const record = toRecord(form)
-      setRecords((current) => [record, ...current])
+    try {
+      setErrorMessage('')
+      const created = await createGuide(toGuideInput(form))
       setForm(initialForm)
-      setActiveId(record.id)
-    })
+      setActiveId(created.id)
+      await refreshData()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '录入失败。')
+    }
   }
 
   function handleToggleSelect(id: string) {
@@ -485,17 +349,21 @@ function App() {
     )
   }
 
-  function handleDeleteSelected() {
+  async function handleDeleteSelected() {
     if (selectedIds.length === 0) return
 
-    startTransition(() => {
-      setRecords((current) => current.filter((record) => !selectedIds.includes(record.id)))
+    try {
+      setErrorMessage('')
+      await deleteGuides(selectedIds)
       setSelectedIds([])
-    })
+      await refreshData()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '删除失败。')
+    }
   }
 
   function handleSelectAll() {
-    const visibleIds = visibleRecords.map((record) => record.id)
+    const visibleIds = records.map((record) => record.id)
     if (allVisibleSelected) {
       setSelectedIds((current) => current.filter((id) => !visibleIds.includes(id)))
       return
@@ -515,41 +383,31 @@ function App() {
     setEditingForm(initialForm)
   }
 
-  function saveEditing() {
+  async function saveEditing() {
     if (!editingId) return
+
     if (!editingForm.courseName.trim() || !editingForm.courseCode.trim()) {
       setErrorMessage('编辑时也需要填写球场名称和球场代号。')
       return
     }
 
-    setErrorMessage('')
-
-    startTransition(() => {
-      setRecords((current) =>
-        current.map((record) =>
-          record.id === editingId
-            ? {
-                ...record,
-                ...toRecord(editingForm),
-                id: record.id,
-                updatedAt: new Date().toISOString(),
-              }
-            : record,
-        ),
-      )
-    })
-
-    cancelEditing()
+    try {
+      setErrorMessage('')
+      await updateGuide(editingId, toGuideInput(editingForm))
+      cancelEditing()
+      await refreshData()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '保存修改失败。')
+    }
   }
 
   async function handleImport(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (!file) return
 
-    setErrorMessage('')
-
     try {
-      let imported: GuideRecord[] = []
+      setErrorMessage('')
+      let imported: GuideInput[] = []
 
       if (file.name.toLowerCase().endsWith('.csv')) {
         const text = await file.text()
@@ -557,7 +415,7 @@ function App() {
         const rows = lines.map((line) =>
           Object.fromEntries(headers.map((header, index) => [header, line[index] ?? ''])),
         )
-        imported = convertRowsToRecords(rows)
+        imported = convertRowsToGuideInputs(rows)
       } else if (file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls')) {
         if (!window.XLSX) {
           throw new Error('Excel 解析器尚未就绪，请刷新页面后重试。')
@@ -567,57 +425,64 @@ function App() {
         const workbook = window.XLSX.read(buffer, { type: 'array' })
         const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
         const rows = window.XLSX.utils.sheet_to_json(firstSheet, { defval: '' })
-        imported = convertRowsToRecords(rows)
+        imported = convertRowsToGuideInputs(rows)
       } else {
         throw new Error('仅支持 CSV、XLSX 或 XLS 文件。')
       }
 
-      const audits = imported.map((record) => {
-        const fingerprint = buildFingerprint(record)
-        const comparisons = records.map((existing) => ({
-          exact: buildFingerprint(existing) === fingerprint,
-          similar: scoreSimilarity(existing, record) >= 0.45,
-        }))
+      if (imported.length === 0) {
+        throw new Error('没有找到可导入的球场攻略。')
+      }
 
-        return {
-          id: record.id,
-          courseName: record.courseName,
-          courseCode: record.courseCode,
-          region: record.region,
-          exactMatches: comparisons.filter((entry) => entry.exact).length,
-          similarMatches: comparisons.filter((entry) => entry.similar).length,
-        }
-      })
-
-      const filtered = imported.filter((record) =>
-        !records.some((existing) => buildFingerprint(existing) === buildFingerprint(record)),
-      )
-
-      startTransition(() => {
-        setImportAudits(audits)
-        setRecords((current) => [...filtered, ...current])
-      })
-
+      const response = await importGuides(imported)
+      setImportAudits(response.audits)
       setImportMessage(
-        `已读取 ${imported.length} 条球场攻略，新增 ${filtered.length} 条，跳过 ${
-          imported.length - filtered.length
-        } 条完全重复内容。`,
+        `已读取 ${response.audits.length} 条球场攻略，新增 ${response.insertedCount} 条，跳过 ${response.skippedCount} 条完全重复内容。`,
       )
       event.target.value = ''
+      await refreshData()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : '导入失败。')
       event.target.value = ''
     }
   }
 
-  function handleExport() {
-    const blob = new Blob([getCsvExport(records)], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `tonysgolfy-guides-${new Date().toISOString().slice(0, 10)}.csv`
-    link.click()
-    URL.revokeObjectURL(url)
+  async function handleExport() {
+    try {
+      setErrorMessage('')
+      const blob = await downloadGuidesCsv({
+        search: searchTerm,
+        searchMode,
+        region: regionFilter,
+        sort: sortMode,
+      })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `tonysgolfy-guides-${new Date().toISOString().slice(0, 10)}.csv`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '导出失败。')
+    }
+  }
+
+  async function handleGenerateGuide() {
+    try {
+      setIsGeneratingGuide(true)
+      setErrorMessage('')
+      const guide = await generateGuide(guidePrompt, {
+        search: searchTerm,
+        searchMode,
+        region: regionFilter,
+        sort: sortMode,
+      })
+      setGeneratedGuide(guide)
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : '生成旅游攻略失败。')
+    } finally {
+      setIsGeneratingGuide(false)
+    }
   }
 
   return (
@@ -640,7 +505,7 @@ function App() {
           </button>
           <div className="stat-card">
             <span>攻略条目</span>
-            <strong>{records.length}</strong>
+            <strong>{allRecords.length}</strong>
           </div>
           <div className="stat-card">
             <span>目的地区域</span>
@@ -726,6 +591,11 @@ function App() {
                 placeholder="例如：海景球场，预算 3000 左右，适合 3 天短途。"
               />
             </label>
+            <div className="action-row subpanel-actions">
+              <button className="primary" type="button" onClick={handleGenerateGuide} disabled={isGeneratingGuide}>
+                {isGeneratingGuide ? '生成中...' : '生成攻略'}
+              </button>
+            </div>
             <pre className="guide-output">{generatedGuide}</pre>
           </div>
 
@@ -738,12 +608,12 @@ function App() {
               <p className="empty-state">当前球场攻略没有明显重复项。</p>
             ) : (
               <ul className="alert-list">
-                {duplicatePreview.map(({ record, exact, score }) => (
-                  <li key={record.id}>
+                {duplicatePreview.map(({ guide, exact, score }) => (
+                  <li key={guide.id}>
                     <div>
-                      <strong>{record.courseName}</strong>
+                      <strong>{guide.courseName}</strong>
                       <span>
-                        {record.region} · {record.courseCode}
+                        {guide.region} · {guide.courseCode}
                       </span>
                     </div>
                     <b>{exact ? '完全重复' : `相似度 ${Math.round(score * 100)}%`}</b>
@@ -844,10 +714,9 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {visibleRecords.map((record) => {
+                {records.map((record) => {
                   const isSelected = selectedIds.includes(record.id)
                   const isActive = activeId === record.id
-                  const isEditing = editingId === record.id
 
                   return (
                     <tr
@@ -863,41 +732,24 @@ function App() {
                           aria-label={`select ${record.courseName}`}
                         />
                       </td>
-                      {isEditing ? (
-                        <>
-                          <td>{record.courseName}</td>
-                          <td>{record.region}</td>
-                          <td>{record.courseCode}</td>
-                          <td>¥{record.greenFee}</td>
-                          <td>{record.bestSeason}</td>
-                          <td>{new Date(record.updatedAt).toLocaleString()}</td>
-                          <td onClick={(event) => event.stopPropagation()}>
-                            <div className="row-actions">
-                              <button className="primary compact" type="button" onClick={() => setEditingId(record.id)}>编辑中</button>
-                            </div>
-                          </td>
-                        </>
-                      ) : (
-                        <>
-                          <td>{record.courseName}</td>
-                          <td>{record.region}</td>
-                          <td>{record.courseCode}</td>
-                          <td>¥{record.greenFee}</td>
-                          <td>{record.bestSeason}</td>
-                          <td>{new Date(record.updatedAt).toLocaleString()}</td>
-                          <td onClick={(event) => event.stopPropagation()}>
-                            <button className="ghost compact row-edit" type="button" onClick={() => startEditing(record)}>
-                              修改
-                            </button>
-                          </td>
-                        </>
-                      )}
+                      <td>{record.courseName}</td>
+                      <td>{record.region}</td>
+                      <td>{record.courseCode}</td>
+                      <td>¥{record.greenFee}</td>
+                      <td>{record.bestSeason}</td>
+                      <td>{new Date(record.updatedAt).toLocaleString()}</td>
+                      <td onClick={(event) => event.stopPropagation()}>
+                        <button className="ghost compact row-edit" type="button" onClick={() => startEditing(record)}>
+                          修改
+                        </button>
+                      </td>
                     </tr>
                   )
                 })}
               </tbody>
             </table>
-            {visibleRecords.length === 0 ? (
+            {isLoading ? <div className="table-empty">正在加载球场攻略...</div> : null}
+            {!isLoading && records.length === 0 ? (
               <div className="table-empty">当前搜索、筛选条件下没有匹配的球场攻略。</div>
             ) : null}
           </div>
