@@ -1,3 +1,262 @@
-fn main() {
-    println!("Hello, world!");
+mod models;
+mod search;
+mod store;
+
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
+
+use axum::{
+    extract::{Path, Query, State},
+    http::{
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
+        HeaderMap, HeaderValue, StatusCode,
+    },
+    response::{IntoResponse, Response},
+    routing::{delete, get, post},
+    Json, Router,
+};
+use models::{
+    BulkDeleteRequest, BulkDeleteResponse, GenerateGuideRequest, GenerateGuideResponse,
+    GuideInput, GuideListResponse, GuidesQuery, HealthResponse, ImportRequest,
+};
+use store::GuideStore;
+use tower_http::cors::{Any, CorsLayer};
+
+#[derive(Clone)]
+struct AppState {
+    store: Arc<RwLock<GuideStore>>,
+}
+
+#[derive(Debug)]
+struct AppError {
+    status: StatusCode,
+    message: String,
+}
+
+type AppResult<T> = Result<T, AppError>;
+
+#[tokio::main]
+async fn main() {
+    let data_path = data_path();
+    let store = GuideStore::load(data_path).expect("failed to initialize guide store");
+    let state = AppState {
+        store: Arc::new(RwLock::new(store)),
+    };
+
+    let app = Router::new()
+        .route("/api/health", get(health))
+        .route("/api/guides", get(list_guides).post(create_guide))
+        .route("/api/guides/export.csv", get(export_guides))
+        .route("/api/guides/duplicates", get(list_duplicate_groups))
+        .route("/api/guides/duplicate-preview", post(preview_duplicates))
+        .route("/api/guides/import", post(import_guides))
+        .route("/api/guides/generate", post(generate_travel_guide))
+        .route("/api/guides/bulk-delete", delete(bulk_delete_guides))
+        .route("/api/guides/{id}", get(get_guide).put(update_guide))
+        .with_state(state)
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods(Any)
+                .allow_headers(Any),
+        );
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .expect("failed to bind backend listener");
+
+    println!("tonysgolfy backend listening on http://localhost:3000");
+    axum::serve(listener, app).await.expect("backend server failed");
+}
+
+async fn health() -> Json<HealthResponse> {
+    Json(HealthResponse { status: "ok" })
+}
+
+async fn list_guides(
+    State(state): State<AppState>,
+    Query(query): Query<GuidesQuery>,
+) -> AppResult<Json<GuideListResponse>> {
+    let store = state
+        .store
+        .read()
+        .map_err(|_| internal_error("failed to read guide store"))?;
+    let guides = store.list(&query);
+    let total = guides.len();
+
+    Ok(Json(GuideListResponse { guides, total }))
+}
+
+async fn get_guide(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> AppResult<Json<models::GuideRecord>> {
+    let store = state
+        .store
+        .read()
+        .map_err(|_| internal_error("failed to read guide store"))?;
+
+    let guide = store.get(&id).ok_or_else(|| AppError {
+        status: StatusCode::NOT_FOUND,
+        message: format!("guide {} not found", id),
+    })?;
+
+    Ok(Json(guide))
+}
+
+async fn create_guide(
+    State(state): State<AppState>,
+    Json(input): Json<GuideInput>,
+) -> AppResult<(StatusCode, Json<models::GuideRecord>)> {
+    let mut store = state
+        .store
+        .write()
+        .map_err(|_| internal_error("failed to write guide store"))?;
+
+    let created = store.create(input).map_err(bad_request)?;
+    Ok((StatusCode::CREATED, Json(created)))
+}
+
+async fn update_guide(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(input): Json<GuideInput>,
+) -> AppResult<Json<models::GuideRecord>> {
+    let mut store = state
+        .store
+        .write()
+        .map_err(|_| internal_error("failed to write guide store"))?;
+
+    let updated = store.update(&id, input).map_err(bad_request)?.ok_or_else(|| AppError {
+        status: StatusCode::NOT_FOUND,
+        message: format!("guide {} not found", id),
+    })?;
+
+    Ok(Json(updated))
+}
+
+async fn bulk_delete_guides(
+    State(state): State<AppState>,
+    Json(request): Json<BulkDeleteRequest>,
+) -> AppResult<Json<BulkDeleteResponse>> {
+    let mut store = state
+        .store
+        .write()
+        .map_err(|_| internal_error("failed to write guide store"))?;
+    let deleted = store.bulk_delete(&request.ids).map_err(internal_error_from)?;
+
+    Ok(Json(BulkDeleteResponse { deleted }))
+}
+
+async fn preview_duplicates(
+    State(state): State<AppState>,
+    Json(input): Json<GuideInput>,
+) -> AppResult<Json<Vec<models::DuplicatePreviewMatch>>> {
+    let store = state
+        .store
+        .read()
+        .map_err(|_| internal_error("failed to read guide store"))?;
+    let preview = store.duplicate_preview(&input).map_err(bad_request)?;
+    Ok(Json(preview))
+}
+
+async fn list_duplicate_groups(State(state): State<AppState>) -> AppResult<Json<Vec<models::DuplicateGroup>>> {
+    let store = state
+        .store
+        .read()
+        .map_err(|_| internal_error("failed to read guide store"))?;
+    Ok(Json(store.duplicate_groups()))
+}
+
+async fn import_guides(
+    State(state): State<AppState>,
+    Json(request): Json<ImportRequest>,
+) -> AppResult<Json<models::ImportResponse>> {
+    let mut store = state
+        .store
+        .write()
+        .map_err(|_| internal_error("failed to write guide store"))?;
+    let response = store.import_guides(request.guides).map_err(bad_request)?;
+    Ok(Json(response))
+}
+
+async fn generate_travel_guide(
+    State(state): State<AppState>,
+    Json(request): Json<GenerateGuideRequest>,
+) -> AppResult<Json<GenerateGuideResponse>> {
+    let store = state
+        .store
+        .read()
+        .map_err(|_| internal_error("failed to read guide store"))?;
+
+    let query = GuidesQuery {
+        search: request.search,
+        search_mode: request.search_mode,
+        region: request.region,
+        sort: request.sort,
+    };
+    let guide = store.generate_travel_guide(&request.prompt, &query);
+    Ok(Json(GenerateGuideResponse { guide }))
+}
+
+async fn export_guides(
+    State(state): State<AppState>,
+    Query(query): Query<GuidesQuery>,
+) -> AppResult<Response> {
+    let store = state
+        .store
+        .read()
+        .map_err(|_| internal_error("failed to read guide store"))?;
+    let csv = store.export_csv(&query).map_err(internal_error_from)?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/csv; charset=utf-8"));
+    headers.insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=\"tonysgolfy-guides.csv\""),
+    );
+
+    Ok((headers, csv).into_response())
+}
+
+fn data_path() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("data")
+        .join("guides.json")
+}
+
+fn bad_request(message: String) -> AppError {
+    AppError {
+        status: StatusCode::BAD_REQUEST,
+        message,
+    }
+}
+
+fn internal_error(message: &str) -> AppError {
+    AppError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message: message.to_string(),
+    }
+}
+
+fn internal_error_from(message: String) -> AppError {
+    AppError {
+        status: StatusCode::INTERNAL_SERVER_ERROR,
+        message,
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(serde_json::json!({
+                "error": self.message,
+            })),
+        )
+            .into_response()
+    }
 }
