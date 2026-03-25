@@ -112,57 +112,76 @@ pub fn semantic_score(record: &GuideRecord, query: &str) -> f32 {
 }
 
 pub fn filter_and_sort(records: &[GuideRecord], query: &GuidesQuery) -> Vec<GuideRecord> {
-    let mut guides = records.to_vec();
-
-    if let Some(region) = query.region.as_ref().filter(|region| !region.trim().is_empty()) {
-        guides.retain(|record| record.region == *region);
-    }
+    let mut guides = filter_region(records, query.region.as_deref());
 
     if let Some(search) = query.search.as_ref().filter(|search| !search.trim().is_empty()) {
-        match query.search_mode.unwrap_or_default() {
-            SearchMode::Keyword => {
-                let normalized = normalize_value(search);
-                guides.retain(|record| {
-                    [
-                        &record.course_name,
-                        &record.region,
-                        &record.course_code,
-                        &record.best_season,
-                        &record.notes,
-                    ]
-                    .into_iter()
-                    .map(|value| normalize_value(value))
-                    .any(|value| value.contains(&normalized))
-                });
-            }
-            SearchMode::Semantic => {
-                guides = guides
-                    .into_iter()
-                    .filter_map(|record| {
-                        let score = semantic_score(&record, search);
-                        (score >= 0.22).then_some((record, score))
-                    })
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .sorted_by(|(_, left_score), (_, right_score)| {
-                        right_score.total_cmp(left_score)
-                    })
-                    .into_iter()
-                    .map(|(record, _)| record)
-                    .collect();
-            }
+        if matches!(query.search_mode.unwrap_or_default(), SearchMode::Keyword) {
+            guides = keyword_filter(&guides, search);
         }
     }
 
-    match query.sort.unwrap_or_default() {
+    sort_guides(&mut guides, query.sort.unwrap_or_default());
+
+    guides
+}
+
+pub fn filter_region(records: &[GuideRecord], region: Option<&str>) -> Vec<GuideRecord> {
+    let mut guides = records.to_vec();
+
+    if let Some(region) = region.filter(|region| !region.trim().is_empty()) {
+        guides.retain(|record| record.region == region);
+    }
+
+    guides
+}
+
+pub fn keyword_filter(records: &[GuideRecord], search: &str) -> Vec<GuideRecord> {
+    let normalized = normalize_value(search);
+
+    records
+        .iter()
+        .filter(|record| {
+            [
+                &record.course_name,
+                &record.region,
+                &record.course_code,
+                &record.best_season,
+                &record.notes,
+            ]
+            .into_iter()
+            .map(|value| normalize_value(value))
+            .any(|value| value.contains(&normalized))
+        })
+        .cloned()
+        .collect()
+}
+
+pub fn sort_guides(guides: &mut [GuideRecord], sort_mode: SortMode) {
+    match sort_mode {
         SortMode::UpdatedDesc => guides.sort_by(|left, right| right.updated_at.cmp(&left.updated_at)),
         SortMode::UpdatedAsc => guides.sort_by(|left, right| left.updated_at.cmp(&right.updated_at)),
         SortMode::FeeDesc => guides.sort_by(|left, right| right.green_fee.cmp(&left.green_fee)),
         SortMode::FeeAsc => guides.sort_by(|left, right| left.green_fee.cmp(&right.green_fee)),
         SortMode::NameAsc => guides.sort_by(|left, right| left.course_name.cmp(&right.course_name)),
     }
+}
 
-    guides
+pub fn sort_semantic_guides(guides: &mut [(GuideRecord, f32)], sort_mode: SortMode) {
+    guides.sort_by(|(left_guide, left_score), (right_guide, right_score)| {
+        right_score
+            .total_cmp(left_score)
+            .then_with(|| compare_guides(left_guide, right_guide, sort_mode))
+    });
+}
+
+fn compare_guides(left: &GuideRecord, right: &GuideRecord, sort_mode: SortMode) -> std::cmp::Ordering {
+    match sort_mode {
+        SortMode::UpdatedDesc => right.updated_at.cmp(&left.updated_at),
+        SortMode::UpdatedAsc => left.updated_at.cmp(&right.updated_at),
+        SortMode::FeeDesc => right.green_fee.cmp(&left.green_fee),
+        SortMode::FeeAsc => left.green_fee.cmp(&right.green_fee),
+        SortMode::NameAsc => left.course_name.cmp(&right.course_name),
+    }
 }
 
 pub fn duplicate_preview(records: &[GuideRecord], input: &GuideInput) -> Vec<DuplicatePreviewMatch> {
@@ -243,74 +262,6 @@ pub fn build_import_audits(existing: &[GuideRecord], inserted: &[GuideRecord]) -
             }
         })
         .collect()
-}
-
-pub fn build_travel_guide(prompt: &str, records: &[GuideRecord]) -> String {
-    if prompt.trim().is_empty() {
-        return "输入你的旅行偏好，例如“海景球场、适合 3 天行程、预算 3000 内”，系统会基于当前球场库生成一段攻略建议。".to_string();
-    }
-
-    let mut ranked = records
-        .iter()
-        .cloned()
-        .filter_map(|record| {
-            let score = semantic_score(&record, prompt);
-            (score > 0.0).then_some((record, score))
-        })
-        .collect::<Vec<_>>();
-
-    ranked.sort_by(|left, right| right.1.total_cmp(&left.1));
-    ranked.truncate(3);
-
-    if ranked.is_empty() {
-        return format!(
-            "没有在当前库里找到和“{}”高度相关的球场。可以先补充更多目的地资料，再重新生成攻略。",
-            prompt
-        );
-    }
-
-    let picks = ranked
-        .iter()
-        .enumerate()
-        .map(|(index, (record, _))| {
-            format!(
-                "{}. {}，位于 {}，参考果岭费约 ¥{}，建议季节为 {}。{}",
-                index + 1,
-                record.course_name,
-                record.region,
-                record.green_fee,
-                if record.best_season.trim().is_empty() {
-                    "待补充"
-                } else {
-                    &record.best_season
-                },
-                record.notes
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    format!(
-        "根据“{}”，建议优先关注以下球场：\n{}\n\n行程建议：优先选择同一地区或航班直达的组合，先确认 tee time，再根据旺季情况安排酒店与交通。",
-        prompt, picks
-    )
-}
-
-trait SortTupleExt<T> {
-    fn sorted_by<F>(self, compare: F) -> Vec<T>
-    where
-        F: FnMut(&T, &T) -> std::cmp::Ordering;
-}
-
-impl<T> SortTupleExt<T> for std::vec::IntoIter<T> {
-    fn sorted_by<F>(self, mut compare: F) -> Vec<T>
-    where
-        F: FnMut(&T, &T) -> std::cmp::Ordering,
-    {
-        let mut values = self.collect::<Vec<_>>();
-        values.sort_by(|left, right| compare(left, right));
-        values
-    }
 }
 
 #[cfg(test)]

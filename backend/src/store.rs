@@ -9,8 +9,8 @@ use uuid::Uuid;
 use crate::{
     models::{GuideInput, GuideRecord, GuidesQuery, ImportResponse},
     search::{
-        build_import_audits, build_travel_guide, duplicate_groups, duplicate_preview,
-        filter_and_sort, fingerprint_for_record, validate_guide_input,
+        build_import_audits, duplicate_groups, duplicate_preview, filter_and_sort,
+        fingerprint_for_record, validate_guide_input,
     },
 };
 
@@ -39,6 +39,10 @@ impl GuideStore {
 
     pub fn list(&self, query: &GuidesQuery) -> Vec<GuideRecord> {
         filter_and_sort(&self.guides, query)
+    }
+
+    pub fn all(&self) -> Vec<GuideRecord> {
+        self.guides.clone()
     }
 
     pub fn get(&self, id: &str) -> Option<GuideRecord> {
@@ -153,11 +157,6 @@ impl GuideStore {
             inserted,
             audits,
         })
-    }
-
-    pub fn generate_travel_guide(&self, prompt: &str, query: &GuidesQuery) -> String {
-        let filtered = filter_and_sort(&self.guides, query);
-        build_travel_guide(prompt, &filtered)
     }
 
     pub fn export_csv(&self, query: &GuidesQuery) -> Result<String, String> {
