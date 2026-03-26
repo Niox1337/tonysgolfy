@@ -4,6 +4,7 @@ mod search;
 mod store;
 
 use std::{
+    env,
     path::PathBuf,
     sync::{Arc, RwLock},
 };
@@ -66,11 +67,12 @@ async fn main() {
                 .allow_headers(Any),
         );
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+    let bind_addr = bind_addr();
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .expect("failed to bind backend listener");
 
-    println!("tonysgolfy backend listening on http://localhost:3000");
+    println!("tonysgolfy backend listening on http://{bind_addr}");
     axum::serve(listener, app).await.expect("backend server failed");
 }
 
@@ -231,6 +233,12 @@ fn data_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("data")
         .join("guides.json")
+}
+
+fn bind_addr() -> String {
+    let host = env::var("HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = env::var("PORT").unwrap_or_else(|_| "3000".to_string());
+    format!("{host}:{port}")
 }
 
 fn bad_request(message: String) -> AppError {

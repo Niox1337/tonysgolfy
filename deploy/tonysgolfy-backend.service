@@ -1,0 +1,17 @@
+[Unit]
+Description=tonysgolfy backend
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/srv/tonysgolfy/backend
+Environment=HOST=127.0.0.1
+Environment=PORT=3000
+ExecStart=/srv/tonysgolfy/backend/target/release/backend
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

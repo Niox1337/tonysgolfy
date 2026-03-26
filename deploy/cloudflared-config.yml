@@ -1,0 +1,7 @@
+tunnel: TONYSGOLFY_TUNNEL_ID
+credentials-file: /etc/cloudflared/TONYSGOLFY_TUNNEL_ID.json
+
+ingress:
+  - hostname: tonysgolfy.niox.lol
+    service: http://127.0.0.1:8080
+  - service: http_status:404
