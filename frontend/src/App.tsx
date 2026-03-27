@@ -513,6 +513,7 @@ function App() {
       })
       setGeneratedGuide(guide)
     } catch (error) {
+      setGeneratedGuide(emptyGuideMessage)
       setErrorMessage(error instanceof Error ? error.message : '生成旅游攻略失败。')
     } finally {
       setIsGeneratingGuide(false)

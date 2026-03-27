@@ -1,4 +1,5 @@
 use std::env;
+use std::time::Duration;
 
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -55,11 +56,30 @@ impl GoogleAiClient {
             .or_else(|_| env::var("GOOGLE_API_KEY"))
             .map_err(|_| {
                 "missing GOOGLE_AI_STUDIO_API_KEY in backend/.env or environment".to_string()
-            })?;
-        let model = env::var("GOOGLE_AI_MODEL").unwrap_or_else(|_| "gemini-2.0-flash".to_string());
+            })?
+            .trim()
+            .to_string();
+        let model = env::var("GOOGLE_AI_MODEL")
+            .unwrap_or_else(|_| "gemini-3-flash-preview".to_string())
+            .trim()
+            .to_string();
+
+        if api_key.is_empty() || api_key == "..." || api_key.eq_ignore_ascii_case("your_api_key") {
+            return Err(
+                "GOOGLE_AI_STUDIO_API_KEY is empty or still using a placeholder value".to_string(),
+            );
+        }
+
+        if model.is_empty() {
+            return Err("GOOGLE_AI_MODEL cannot be empty".to_string());
+        }
 
         Ok(Self {
-            http: Client::new(),
+            http: Client::builder()
+                .connect_timeout(Duration::from_secs(10))
+                .timeout(Duration::from_secs(45))
+                .build()
+                .map_err(|error| format!("failed to build Google AI Studio client: {error}"))?,
             api_key,
             model,
         })
@@ -71,8 +91,8 @@ impl GoogleAiClient {
         guides: &[GuideRecord],
     ) -> Result<String, String> {
         let endpoint = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent?key={}",
-            self.model, self.api_key
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            self.model
         );
 
         let context = guides
@@ -116,6 +136,8 @@ impl GoogleAiClient {
         let response = self
             .http
             .post(endpoint)
+            .header("x-goog-api-key", &self.api_key)
+            .header("Content-Type", "application/json")
             .json(&GenerateContentRequest {
                 contents: vec![Content {
                     parts: vec![Part { text: prompt }],

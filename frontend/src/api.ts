@@ -64,14 +64,30 @@ type QueryOptions = {
   sort?: SortMode
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-    ...init,
-  })
+async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 15000): Promise<T> {
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
+  let response: Response
+
+  try {
+    response = await fetch(path, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...(init?.headers ?? {}),
+      },
+      ...init,
+      signal: controller.signal,
+    })
+  } catch (error) {
+    window.clearTimeout(timeoutId)
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      throw new Error('请求超时，请检查后端或外部 AI 服务是否可用。')
+    }
+    throw error
+  }
+
+  window.clearTimeout(timeoutId)
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null
@@ -146,7 +162,7 @@ export async function generateGuide(prompt: string, options: QueryOptions = {}) 
       region: options.region === 'all' ? undefined : options.region,
       sort: options.sort,
     }),
-  })
+  }, 50000)
 
   return response.guide
 }
