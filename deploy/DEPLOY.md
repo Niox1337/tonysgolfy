@@ -102,6 +102,7 @@ sudo cp /srv/tonysgolfy/deploy/tonysgolfy-backend.service /etc/systemd/system/to
 ```
 
 If your deployment user is not `www-data`, edit the unit before enabling it.
+If you use a `.env`, use `APP_HOST` and `APP_PORT` instead of `HOST` and `PORT` to avoid shell env conflicts.
 
 Then start it:
 
