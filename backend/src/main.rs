@@ -1,3 +1,4 @@
+mod google_ai;
 mod models;
 mod python_semantic;
 mod search;
@@ -23,14 +24,16 @@ use models::{
     BulkDeleteRequest, BulkDeleteResponse, GenerateGuideRequest, GenerateGuideResponse,
     GuideInput, GuideListResponse, GuidesQuery, HealthResponse, ImportRequest,
 };
+use google_ai::GoogleAiClient;
 use python_semantic::rank_guides;
-use search::{filter_and_sort, filter_region, sort_guides, sort_semantic_guides};
+use search::{filter_region, sort_semantic_guides};
 use store::GuideStore;
 use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Clone)]
 struct AppState {
     store: Arc<RwLock<GuideStore>>,
+    google_ai: GoogleAiClient,
 }
 
 #[derive(Debug)]
@@ -43,10 +46,13 @@ type AppResult<T> = Result<T, AppError>;
 
 #[tokio::main]
 async fn main() {
+    dotenvy::dotenv().ok();
     let data_path = data_path();
     let store = GuideStore::load(data_path).expect("failed to initialize guide store");
+    let google_ai = GoogleAiClient::from_env().expect("failed to initialize Google AI Studio client");
     let state = AppState {
         store: Arc::new(RwLock::new(store)),
+        google_ai,
     };
 
     let app = Router::new()
@@ -191,20 +197,24 @@ async fn generate_travel_guide(
     State(state): State<AppState>,
     Json(request): Json<GenerateGuideRequest>,
 ) -> AppResult<Json<GenerateGuideResponse>> {
-    let store = state
-        .store
-        .read()
-        .map_err(|_| internal_error("failed to read guide store"))?;
-
     let query = GuidesQuery {
         search: request.search,
         search_mode: request.search_mode,
         region: request.region,
         sort: request.sort,
     };
-    let filtered_guides =
-        list_guides_with_semantic_support(&store, &query).map_err(internal_error_from)?;
-    let guide = build_travel_guide_with_semantic_support(&request.prompt, &filtered_guides);
+    let filtered_guides = {
+        let store = state
+            .store
+            .read()
+            .map_err(|_| internal_error("failed to read guide store"))?;
+        list_guides_with_semantic_support(&store, &query).map_err(internal_error_from)?
+    };
+    let guide = state
+        .google_ai
+        .generate_travel_guide(&request.prompt, &filtered_guides)
+        .await
+        .map_err(internal_error_from)?;
     Ok(Json(GenerateGuideResponse { guide }))
 }
 
@@ -300,105 +310,4 @@ fn list_guides_with_semantic_support(
     sort_semantic_guides(&mut guides, query.sort.unwrap_or_default());
 
     Ok(guides.into_iter().map(|(guide, _)| guide).collect())
-}
-
-fn build_travel_guide_with_semantic_support(prompt: &str, records: &[models::GuideRecord]) -> String {
-    if prompt.trim().is_empty() {
-        return "输入你的旅行偏好，例如“海景球场、适合 3 天行程、预算 3000 内”，系统会基于当前球场库生成一段攻略建议。".to_string();
-    }
-
-    match rank_guides(prompt, records, 0.0) {
-        Ok(ranked) => {
-            let by_id = records
-                .iter()
-                .cloned()
-                .map(|guide| (guide.id.clone(), guide))
-                .collect::<std::collections::HashMap<_, _>>();
-
-            let picks = ranked
-                .into_iter()
-                .take(3)
-                .filter_map(|entry| by_id.get(&entry.id).cloned())
-                .collect::<Vec<_>>();
-
-            if picks.is_empty() {
-                return format!(
-                    "没有在当前库里找到和“{}”高度相关的球场。可以先补充更多目的地资料，再重新生成攻略。",
-                    prompt
-                );
-            }
-
-            let lines = picks
-                .iter()
-                .enumerate()
-                .map(|(index, record)| {
-                    format!(
-                        "{}. {}，位于 {}，参考果岭费约 ¥{}，建议季节为 {}。{}",
-                        index + 1,
-                        record.course_name,
-                        record.region,
-                        record.green_fee,
-                        if record.best_season.trim().is_empty() {
-                            "待补充"
-                        } else {
-                            &record.best_season
-                        },
-                        record.notes
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            format!(
-                "根据“{}”，建议优先关注以下球场：\n{}\n\n行程建议：优先选择同一地区或航班直达的组合，先确认 tee time，再根据旺季情况安排酒店与交通。",
-                prompt, lines
-            )
-        }
-        Err(_) => {
-            let mut fallback = filter_and_sort(
-                records,
-                &models::GuidesQuery {
-                    search: None,
-                    search_mode: None,
-                    region: None,
-                    sort: Some(models::SortMode::UpdatedDesc),
-                },
-            );
-            sort_guides(&mut fallback, models::SortMode::UpdatedDesc);
-            let picks = fallback.into_iter().take(3).collect::<Vec<_>>();
-
-            if picks.is_empty() {
-                return format!(
-                    "没有在当前库里找到和“{}”高度相关的球场。可以先补充更多目的地资料，再重新生成攻略。",
-                    prompt
-                );
-            }
-
-            let lines = picks
-                .iter()
-                .enumerate()
-                .map(|(index, record)| {
-                    format!(
-                        "{}. {}，位于 {}，参考果岭费约 ¥{}，建议季节为 {}。{}",
-                        index + 1,
-                        record.course_name,
-                        record.region,
-                        record.green_fee,
-                        if record.best_season.trim().is_empty() {
-                            "待补充"
-                        } else {
-                            &record.best_season
-                        },
-                        record.notes
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-
-            format!(
-                "根据“{}”，建议优先关注以下球场：\n{}\n\n行程建议：优先选择同一地区或航班直达的组合，先确认 tee time，再根据旺季情况安排酒店与交通。",
-                prompt, lines
-            )
-        }
-    }
 }

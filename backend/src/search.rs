@@ -62,6 +62,7 @@ pub fn score_similarity_record_input(record: &GuideRecord, input: &GuideInput) -
     score
 }
 
+#[cfg(test)]
 pub fn semantic_score(record: &GuideRecord, query: &str) -> f32 {
     let terms = normalize_value(query)
         .split_whitespace()

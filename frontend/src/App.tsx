@@ -504,6 +504,7 @@ function App() {
     try {
       setIsGeneratingGuide(true)
       setErrorMessage('')
+      setGeneratedGuide('AI 正在根据你的输入和现有球场数据生成旅游攻略，请稍候...')
       const guide = await generateGuide(guidePrompt, {
         search: searchTerm,
         searchMode,
