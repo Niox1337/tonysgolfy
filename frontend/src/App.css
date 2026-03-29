@@ -280,24 +280,29 @@ textarea:focus {
 
 .toolbar {
   margin-bottom: 16px;
+  flex-wrap: wrap;
 }
 
 .toolbelt {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(150px, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 16px;
 }
 
 .tool-field {
   display: grid;
+  flex: 1 1 180px;
+  min-width: 0;
   gap: 8px;
   font-size: 0.9rem;
   color: var(--muted);
 }
 
+.tool-field input,
 .tool-field select {
   width: 100%;
+  min-width: 0;
   border: 1px solid var(--line);
   background: var(--field);
   color: var(--text);
@@ -313,11 +318,12 @@ textarea:focus {
 }
 
 .search-field {
-  grid-column: span 1;
+  flex: 2 1 280px;
 }
 
 .table-wrap {
   overflow: auto;
+  height: clamp(420px, 56vh, 620px);
   border-radius: 22px;
   border: 1px solid var(--line);
   background: var(--field);
@@ -420,6 +426,10 @@ tbody tr:focus-within .row-edit,
   box-shadow: var(--shadow);
 }
 
+.modal-subpanel {
+  margin-top: 20px;
+}
+
 .modal-grid {
   margin-top: 8px;
 }
@@ -480,10 +490,6 @@ tbody tr:focus-within .row-edit,
   }
 
   .field-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .toolbelt {
     grid-template-columns: 1fr;
   }
 

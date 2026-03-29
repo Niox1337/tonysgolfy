@@ -20,6 +20,7 @@ import type {
   SearchMode,
   SortMode,
 } from './api'
+import { CreateGuideModal } from './modules/guides/components/CreateGuideModal'
 import { EditGuideModal } from './modules/guides/components/EditGuideModal'
 import { GuideDetailPanel } from './modules/guides/components/GuideDetailPanel'
 import { GuideFormPanel } from './modules/guides/components/GuideFormPanel'
@@ -45,6 +46,7 @@ function App() {
   const [form, setForm] = useState<FormState>(initialForm)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingForm, setEditingForm] = useState<FormState>(initialForm)
   const [searchTerm, setSearchTerm] = useState('')
@@ -210,6 +212,7 @@ function App() {
       setErrorMessage('')
       const created = await createGuide(toGuideInput(form))
       setForm(initialForm)
+      setIsCreateModalOpen(false)
       setActiveId(created.id)
       await refreshData()
     } catch (error) {
@@ -401,17 +404,17 @@ function App() {
 
       <section className="workspace-grid">
         <GuideFormPanel
-          form={form}
           guidePrompt={guidePrompt}
           generatedGuide={generatedGuide}
           importMessage={importMessage}
           errorMessage={errorMessage}
           isGeneratingGuide={isGeneratingGuide}
-          duplicatePreview={duplicatePreview}
           importAudits={importAudits}
-          onUpdateForm={updateForm}
           onGuidePromptChange={setGuidePrompt}
-          onAddItem={handleAddItem}
+          onOpenCreateModal={() => {
+            setErrorMessage('')
+            setIsCreateModalOpen(true)
+          }}
           onImport={handleImport}
           onExportCsv={handleExport}
           onExportExcel={handleExportExcel}
@@ -442,6 +445,18 @@ function App() {
 
         <GuideDetailPanel activeRecord={activeRecord} duplicateGroups={duplicateGroups} />
       </section>
+
+      <CreateGuideModal
+        isOpen={isCreateModalOpen}
+        form={form}
+        duplicatePreview={duplicatePreview}
+        onUpdateForm={updateForm}
+        onSave={handleAddItem}
+        onCancel={() => {
+          setIsCreateModalOpen(false)
+          setErrorMessage('')
+        }}
+      />
 
       <EditGuideModal
         editingId={editingId}
