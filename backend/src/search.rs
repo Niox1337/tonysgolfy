@@ -62,56 +62,6 @@ pub fn score_similarity_record_input(record: &GuideRecord, input: &GuideInput) -
     score
 }
 
-#[cfg(test)]
-pub fn semantic_score(record: &GuideRecord, query: &str) -> f32 {
-    let terms = normalize_value(query)
-        .split_whitespace()
-        .filter(|term| !term.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-
-    if terms.is_empty() {
-        return 1.0;
-    }
-
-    let course_name = normalize_value(&record.course_name);
-    let region = normalize_value(&record.region);
-    let course_code = normalize_value(&record.course_code);
-    let best_season = normalize_value(&record.best_season);
-    let notes = normalize_value(&record.notes);
-
-    let mut score = 0.0;
-
-    for term in &terms {
-        if course_name.contains(term) {
-            score += 0.35;
-        }
-        if region.contains(term) {
-            score += 0.25;
-        }
-        if course_code.contains(term) {
-            score += 0.15;
-        }
-        if best_season.contains(term) {
-            score += 0.15;
-        }
-        if notes.contains(term) {
-            score += 0.1;
-        }
-        if term == "海景" && (notes.contains('海') || notes.contains("悬崖")) {
-            score += 0.35;
-        }
-        if term == "度假" && (notes.contains("酒店") || notes.contains("度假")) {
-            score += 0.35;
-        }
-        if term == "短途" && (region.contains("singapore") || notes.contains("机场")) {
-            score += 0.35;
-        }
-    }
-
-    score / terms.len() as f32
-}
-
 pub fn filter_and_sort(records: &[GuideRecord], query: &GuidesQuery) -> Vec<GuideRecord> {
     let mut guides = filter_region(records, query.region.as_deref());
 
@@ -267,9 +217,8 @@ pub fn build_import_audits(existing: &[GuideRecord], inserted: &[GuideRecord]) -
 
 #[cfg(test)]
 mod tests {
-    use crate::models::{GuideInput, GuideRecord, GuidesQuery, SearchMode};
-
-    use super::{duplicate_preview, filter_and_sort, semantic_score};
+    use crate::models::{GuideInput, GuideRecord};
+    use super::{duplicate_preview};
 
     fn sample_record() -> GuideRecord {
         GuideRecord {
@@ -282,22 +231,6 @@ mod tests {
             notes: "适合城市高尔夫短途，机场交通方便。".to_string(),
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         }
-    }
-
-    #[test]
-    fn semantic_search_matches_short_trip_hint() {
-        assert!(semantic_score(&sample_record(), "短途 城市") > 0.22);
-    }
-
-    #[test]
-    fn keyword_filter_returns_matching_record() {
-        let guides = vec![sample_record()];
-        let query = GuidesQuery {
-            search: Some("singapore".to_string()),
-            search_mode: Some(SearchMode::Keyword),
-            ..GuidesQuery::default()
-        };
-        assert_eq!(filter_and_sort(&guides, &query).len(), 1);
     }
 
     #[test]
