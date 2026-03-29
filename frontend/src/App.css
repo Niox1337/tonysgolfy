@@ -47,6 +47,12 @@
   padding: 24px;
 }
 
+.loading-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 10px;
+}
+
 .login-card-header {
   display: grid;
   gap: 16px;
@@ -140,6 +146,10 @@
   gap: 10px;
   color: var(--surface-text);
   background: var(--accent);
+}
+
+.logout-button {
+  grid-column: 1 / -1;
 }
 
 .theme-icon {
@@ -259,6 +269,10 @@ textarea:focus {
   background: #be123c;
 }
 
+.primary:disabled,
+.ghost:disabled,
+.file-button:disabled,
+.theme-toggle:disabled,
 .danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;

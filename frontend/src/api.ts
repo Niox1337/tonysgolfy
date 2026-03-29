@@ -41,6 +41,11 @@ export type DuplicateGroup = {
   items: GuideRecord[]
 }
 
+export type SessionResponse = {
+  authenticated: boolean
+  username: string | null
+}
+
 type GuideListResponse = {
   guides: GuideRecord[]
   total: number
@@ -64,6 +69,16 @@ type QueryOptions = {
   sort?: SortMode
 }
 
+export class ApiError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 15000): Promise<T> {
   const controller = new AbortController()
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
@@ -76,6 +91,7 @@ async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 1500
         'Content-Type': 'application/json',
         ...(init?.headers ?? {}),
       },
+      credentials: 'same-origin',
       ...init,
       signal: controller.signal,
     })
@@ -91,7 +107,7 @@ async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 1500
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(payload?.error ?? '请求失败。')
+    throw new ApiError(response.status, payload?.error ?? '请求失败。')
   }
 
   return response.json() as Promise<T>
@@ -111,6 +127,23 @@ function toQueryString(options: QueryOptions) {
 
 export async function listGuides(options: QueryOptions = {}) {
   return requestJson<GuideListResponse>(`/api/guides${toQueryString(options)}`)
+}
+
+export async function getSession() {
+  return requestJson<SessionResponse>('/api/auth/session')
+}
+
+export async function login(username: string, password: string) {
+  return requestJson<SessionResponse>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+}
+
+export async function logout() {
+  return requestJson<SessionResponse>('/api/auth/logout', {
+    method: 'POST',
+  })
 }
 
 export async function createGuide(input: GuideInput) {
@@ -168,11 +201,13 @@ export async function generateGuide(prompt: string, options: QueryOptions = {}) 
 }
 
 export async function downloadGuidesCsv(options: QueryOptions = {}) {
-  const response = await fetch(`/api/guides/export.csv${toQueryString(options)}`)
+  const response = await fetch(`/api/guides/export.csv${toQueryString(options)}`, {
+    credentials: 'same-origin',
+  })
 
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(payload?.error ?? '导出失败。')
+    throw new ApiError(response.status, payload?.error ?? '导出失败。')
   }
 
   return response.blob()

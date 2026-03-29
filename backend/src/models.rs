@@ -131,3 +131,16 @@ pub struct GenerateGuideRequest {
 pub struct GenerateGuideResponse {
     pub guide: String,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub username: String,
+    pub password: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionResponse {
+    pub authenticated: bool,
+    pub username: Option<String>,
+}

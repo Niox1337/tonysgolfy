@@ -5,6 +5,7 @@ type HeroPanelProps = {
   allRecordsCount: number
   featuredCount: number
   onToggleTheme: () => void
+  onLogout: () => Promise<void>
 }
 
 export function HeroPanel({
@@ -12,6 +13,7 @@ export function HeroPanel({
   allRecordsCount,
   featuredCount,
   onToggleTheme,
+  onLogout,
 }: HeroPanelProps) {
   return (
     <section className="hero-panel">
@@ -25,6 +27,9 @@ export function HeroPanel({
             {theme === 'day' ? '🌙' : '☀'}
           </span>
           {theme === 'day' ? '切换夜间模式' : '切换日间模式'}
+        </button>
+        <button className="ghost logout-button" type="button" onClick={onLogout}>
+          退出登录
         </button>
         <div className="stat-card">
           <span>攻略条目</span>

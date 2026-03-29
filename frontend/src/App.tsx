@@ -1,13 +1,17 @@
 import { startTransition, useDeferredValue, useEffect, useMemo, useState } from 'react'
 import type { ChangeEvent } from 'react'
 import {
+  ApiError,
   createGuide,
   deleteGuides,
   downloadGuidesCsv,
   generateGuide,
+  getSession,
   importGuides,
+  login,
   listDuplicateGroups,
   listGuides,
+  logout,
   previewDuplicates,
   updateGuide,
 } from './api'
@@ -21,7 +25,6 @@ import type {
   SortMode,
 } from './api'
 import { LoginPage } from './modules/auth/components/LoginPage'
-import { readAuthState, writeAuthState } from './modules/auth/session'
 import { LOGIN_ROUTE, TABLE_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
 import { CreateGuideModal } from './modules/guides/components/CreateGuideModal'
 import { EditGuideModal } from './modules/guides/components/EditGuideModal'
@@ -45,7 +48,9 @@ import './App.css'
 function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme())
   const [currentRoute, setCurrentRoute] = useState(() => normalizeRoute(window.location.pathname))
-  const [isAuthenticated, setIsAuthenticated] = useState(() => readAuthState())
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isCheckingSession, setIsCheckingSession] = useState(true)
+  const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [loginError, setLoginError] = useState('')
   const [records, setRecords] = useState<GuideRecord[]>([])
   const [allRecords, setAllRecords] = useState<GuideRecord[]>([])
@@ -87,6 +92,34 @@ function App() {
   }, [])
 
   useEffect(() => {
+    let cancelled = false
+
+    async function loadSession() {
+      try {
+        const session = await getSession()
+        if (cancelled) return
+        setIsAuthenticated(session.authenticated)
+      } catch {
+        if (!cancelled) {
+          setIsAuthenticated(false)
+        }
+      } finally {
+        if (!cancelled) {
+          setIsCheckingSession(false)
+        }
+      }
+    }
+
+    loadSession()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isCheckingSession) return
+
     const targetRoute = isAuthenticated ? TABLE_ROUTE : LOGIN_ROUTE
     const routeExists = window.location.pathname === LOGIN_ROUTE || window.location.pathname === TABLE_ROUTE
     const shouldRedirect =
@@ -98,10 +131,10 @@ function App() {
     if (shouldRedirect) {
       navigateTo(targetRoute, true)
     }
-  }, [currentRoute, isAuthenticated])
+  }, [currentRoute, isAuthenticated, isCheckingSession])
 
   useEffect(() => {
-    if (!isAuthenticated || currentRoute !== TABLE_ROUTE) {
+    if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE) {
       setIsLoading(false)
       return
     }
@@ -124,7 +157,7 @@ function App() {
         )
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : '加载球场数据失败。')
+          handleApiError(error, '加载球场数据失败。')
         }
       }
     }
@@ -134,10 +167,10 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [currentRoute, isAuthenticated, reloadToken])
+  }, [currentRoute, isAuthenticated, isCheckingSession, reloadToken])
 
   useEffect(() => {
-    if (!isAuthenticated || currentRoute !== TABLE_ROUTE) {
+    if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE) {
       setIsLoading(false)
       return
     }
@@ -160,7 +193,7 @@ function App() {
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : '加载列表失败。')
+          handleApiError(error, '加载列表失败。')
         }
       } finally {
         if (!cancelled) {
@@ -174,10 +207,10 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [currentRoute, deferredSearchTerm, isAuthenticated, regionFilter, reloadToken, searchMode, sortMode])
+  }, [currentRoute, deferredSearchTerm, isAuthenticated, isCheckingSession, regionFilter, reloadToken, searchMode, sortMode])
 
   useEffect(() => {
-    if (!isAuthenticated || currentRoute !== TABLE_ROUTE) return
+    if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE) return
 
     if (!activeId && allRecords.length > 0) {
       setActiveId(allRecords[0].id)
@@ -187,10 +220,10 @@ function App() {
     if (activeId && !allRecords.some((record) => record.id === activeId)) {
       setActiveId(allRecords[0]?.id ?? null)
     }
-  }, [activeId, allRecords, currentRoute, isAuthenticated])
+  }, [activeId, allRecords, currentRoute, isAuthenticated, isCheckingSession])
 
   useEffect(() => {
-    if (!isAuthenticated || currentRoute !== TABLE_ROUTE || !isCreateModalOpen) {
+    if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE || !isCreateModalOpen) {
       setDuplicatePreview([])
       return
     }
@@ -209,7 +242,7 @@ function App() {
         }
       } catch (error) {
         if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : '重复检查失败。')
+          handleApiError(error, '重复检查失败。')
         }
       }
     }, 250)
@@ -218,7 +251,7 @@ function App() {
       cancelled = true
       window.clearTimeout(timeoutId)
     }
-  }, [currentRoute, form, isAuthenticated, isCreateModalOpen])
+  }, [currentRoute, form, isAuthenticated, isCheckingSession, isCreateModalOpen])
 
   const activeRecord = useMemo(
     () => allRecords.find((record) => record.id === activeId) ?? null,
@@ -248,6 +281,20 @@ function App() {
     })
   }
 
+  function handleApiError(error: unknown, fallbackMessage: string) {
+    if (error instanceof ApiError && error.status === 401) {
+      setIsAuthenticated(false)
+      setLoginError('登录状态已失效，请重新登录。')
+      setErrorMessage('')
+      setIsCreateModalOpen(false)
+      setEditingId(null)
+      return true
+    }
+
+    setErrorMessage(error instanceof Error ? error.message : fallbackMessage)
+    return false
+  }
+
   async function handleAddItem() {
     if (!form.courseName.trim() || !form.courseCode.trim()) {
       setErrorMessage('至少需要填写球场名称和球场代号。')
@@ -262,7 +309,7 @@ function App() {
       setActiveId(created.id)
       await refreshData()
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '录入失败。')
+      handleApiError(error, '录入失败。')
     }
   }
 
@@ -281,7 +328,7 @@ function App() {
       setSelectedIds([])
       await refreshData()
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '删除失败。')
+      handleApiError(error, '删除失败。')
     }
   }
 
@@ -320,7 +367,7 @@ function App() {
       cancelEditing()
       await refreshData()
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '保存修改失败。')
+      handleApiError(error, '保存修改失败。')
     }
   }
 
@@ -365,7 +412,7 @@ function App() {
       event.target.value = ''
       await refreshData()
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '导入失败。')
+      handleApiError(error, '导入失败。')
       event.target.value = ''
     }
   }
@@ -386,7 +433,7 @@ function App() {
       link.click()
       URL.revokeObjectURL(url)
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '导出失败。')
+      handleApiError(error, '导出失败。')
     }
   }
 
@@ -415,7 +462,7 @@ function App() {
         `tonysgolfy-guides-${new Date().toISOString().slice(0, 10)}.xlsx`,
       )
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : '导出 Excel 失败。')
+      handleApiError(error, '导出 Excel 失败。')
     }
   }
 
@@ -433,23 +480,59 @@ function App() {
       setGeneratedGuide(guide)
     } catch (error) {
       setGeneratedGuide(emptyGuideMessage)
-      setErrorMessage(error instanceof Error ? error.message : '生成旅游攻略失败。')
+      handleApiError(error, '生成旅游攻略失败。')
     } finally {
       setIsGeneratingGuide(false)
     }
   }
 
-  function handleLogin(username: string, password: string) {
+  async function handleLogin(username: string, password: string) {
     if (!username.trim() || !password.trim()) {
       return '请输入用户名和密码。'
     }
 
-    setLoginError('')
-    setErrorMessage('')
-    setIsAuthenticated(true)
-    writeAuthState(true)
-    navigateTo(TABLE_ROUTE)
-    return null
+    try {
+      setIsLoggingIn(true)
+      setLoginError('')
+      setErrorMessage('')
+      const session = await login(username, password)
+      setIsAuthenticated(session.authenticated)
+      navigateTo(TABLE_ROUTE)
+      return null
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '登录失败。'
+      setLoginError(message)
+      return message
+    } finally {
+      setIsLoggingIn(false)
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await logout()
+    } catch {
+      // Even if logout fails server-side, clear the client auth state so the user can re-authenticate.
+    } finally {
+      setIsAuthenticated(false)
+      setLoginError('')
+      setErrorMessage('')
+      setSelectedIds([])
+      setIsCreateModalOpen(false)
+      setEditingId(null)
+      navigateTo(LOGIN_ROUTE)
+    }
+  }
+
+  if (isCheckingSession) {
+    return (
+      <main className="auth-shell">
+        <section className="login-card loading-card">
+          <h2>正在检查登录状态</h2>
+          <p className="helper-text">稍候进入 tonysgolfy。</p>
+        </section>
+      </main>
+    )
   }
 
   if (!isAuthenticated || currentRoute === LOGIN_ROUTE) {
@@ -457,6 +540,7 @@ function App() {
       <LoginPage
         theme={theme}
         errorMessage={loginError}
+        isSubmitting={isLoggingIn}
         onToggleTheme={() => setTheme((current) => (current === 'day' ? 'night' : 'day'))}
         onLogin={handleLogin}
       />
@@ -470,6 +554,7 @@ function App() {
         allRecordsCount={allRecords.length}
         featuredCount={featuredCount}
         onToggleTheme={() => setTheme((current) => (current === 'day' ? 'night' : 'day'))}
+        onLogout={handleLogout}
       />
 
       <section className="workspace-grid">

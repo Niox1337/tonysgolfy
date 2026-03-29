@@ -1,3 +1,4 @@
+mod auth;
 mod google_ai;
 mod models;
 mod python_semantic;
@@ -20,9 +21,11 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
+use auth::{set_cookie_header, AuthError, AuthService};
 use models::{
     BulkDeleteRequest, BulkDeleteResponse, GenerateGuideRequest, GenerateGuideResponse,
-    GuideInput, GuideListResponse, GuidesQuery, HealthResponse, ImportRequest,
+    GuideInput, GuideListResponse, GuidesQuery, HealthResponse, ImportRequest, LoginRequest,
+    SessionResponse,
 };
 use google_ai::GoogleAiClient;
 use python_semantic::rank_guides;
@@ -34,6 +37,7 @@ use tower_http::cors::{Any, CorsLayer};
 struct AppState {
     store: Arc<RwLock<GuideStore>>,
     google_ai: GoogleAiClient,
+    auth: AuthService,
 }
 
 #[derive(Debug)]
@@ -50,13 +54,18 @@ async fn main() {
     let data_path = data_path();
     let store = GuideStore::load(data_path).expect("failed to initialize guide store");
     let google_ai = GoogleAiClient::from_env().expect("failed to initialize Google AI Studio client");
+    let auth = AuthService::from_env().expect("failed to initialize auth service");
     let state = AppState {
         store: Arc::new(RwLock::new(store)),
         google_ai,
+        auth,
     };
 
     let app = Router::new()
         .route("/api/health", get(health))
+        .route("/api/auth/login", post(login))
+        .route("/api/auth/logout", post(logout))
+        .route("/api/auth/session", get(get_session))
         .route("/api/guides", get(list_guides).post(create_guide))
         .route("/api/guides/export.csv", get(export_guides))
         .route("/api/guides/duplicates", get(list_duplicate_groups))
@@ -86,10 +95,62 @@ async fn health() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
 }
 
+async fn login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<LoginRequest>,
+) -> AppResult<(HeaderMap, Json<SessionResponse>)> {
+    let (user, cookie) = state
+        .auth
+        .login(&headers, &request.username, &request.password)
+        .map_err(auth_error)?;
+    let mut headers = HeaderMap::new();
+    set_cookie_header(&mut headers, cookie);
+
+    Ok((
+        headers,
+        Json(SessionResponse {
+            authenticated: true,
+            username: Some(user.username),
+        }),
+    ))
+}
+
+async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<(HeaderMap, Json<SessionResponse>)> {
+    let cookie = state.auth.logout(&headers).map_err(internal_error_from)?;
+    let mut response_headers = HeaderMap::new();
+    set_cookie_header(&mut response_headers, cookie);
+
+    Ok((
+        response_headers,
+        Json(SessionResponse {
+            authenticated: false,
+            username: None,
+        }),
+    ))
+}
+
+async fn get_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<SessionResponse>> {
+    let user = state.auth.current_user(&headers).map_err(internal_error_from)?;
+
+    Ok(Json(SessionResponse {
+        authenticated: user.is_some(),
+        username: user.map(|session| session.username),
+    }))
+}
+
 async fn list_guides(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<GuidesQuery>,
 ) -> AppResult<Json<GuideListResponse>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let store = state
         .store
         .read()
@@ -102,8 +163,10 @@ async fn list_guides(
 
 async fn get_guide(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
 ) -> AppResult<Json<models::GuideRecord>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let store = state
         .store
         .read()
@@ -119,8 +182,10 @@ async fn get_guide(
 
 async fn create_guide(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<GuideInput>,
 ) -> AppResult<(StatusCode, Json<models::GuideRecord>)> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let mut store = state
         .store
         .write()
@@ -132,9 +197,11 @@ async fn create_guide(
 
 async fn update_guide(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Path(id): Path<String>,
     Json(input): Json<GuideInput>,
 ) -> AppResult<Json<models::GuideRecord>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let mut store = state
         .store
         .write()
@@ -150,8 +217,10 @@ async fn update_guide(
 
 async fn bulk_delete_guides(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<BulkDeleteRequest>,
 ) -> AppResult<Json<BulkDeleteResponse>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let mut store = state
         .store
         .write()
@@ -163,8 +232,10 @@ async fn bulk_delete_guides(
 
 async fn preview_duplicates(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(input): Json<GuideInput>,
 ) -> AppResult<Json<Vec<models::DuplicatePreviewMatch>>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let store = state
         .store
         .read()
@@ -173,7 +244,11 @@ async fn preview_duplicates(
     Ok(Json(preview))
 }
 
-async fn list_duplicate_groups(State(state): State<AppState>) -> AppResult<Json<Vec<models::DuplicateGroup>>> {
+async fn list_duplicate_groups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<Vec<models::DuplicateGroup>>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let store = state
         .store
         .read()
@@ -183,8 +258,10 @@ async fn list_duplicate_groups(State(state): State<AppState>) -> AppResult<Json<
 
 async fn import_guides(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<ImportRequest>,
 ) -> AppResult<Json<models::ImportResponse>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let mut store = state
         .store
         .write()
@@ -195,8 +272,10 @@ async fn import_guides(
 
 async fn generate_travel_guide(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<GenerateGuideRequest>,
 ) -> AppResult<Json<GenerateGuideResponse>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let query = GuidesQuery {
         search: request.search,
         search_mode: request.search_mode,
@@ -220,8 +299,10 @@ async fn generate_travel_guide(
 
 async fn export_guides(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Query(query): Query<GuidesQuery>,
 ) -> AppResult<Response> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
     let store = state
         .store
         .read()
@@ -255,6 +336,28 @@ fn bad_request(message: String) -> AppError {
     AppError {
         status: StatusCode::BAD_REQUEST,
         message,
+    }
+}
+
+fn unauthorized(message: String) -> AppError {
+    AppError {
+        status: StatusCode::UNAUTHORIZED,
+        message,
+    }
+}
+
+fn too_many_requests(message: String) -> AppError {
+    AppError {
+        status: StatusCode::TOO_MANY_REQUESTS,
+        message,
+    }
+}
+
+fn auth_error(error: AuthError) -> AppError {
+    match error {
+        AuthError::Unauthorized(message) => unauthorized(message),
+        AuthError::TooManyRequests(message) => too_many_requests(message),
+        AuthError::Internal(message) => internal_error_from(message),
     }
 }
 

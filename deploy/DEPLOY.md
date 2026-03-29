@@ -103,6 +103,17 @@ sudo cp /srv/tonysgolfy/deploy/tonysgolfy-backend.service /etc/systemd/system/to
 
 If your deployment user is not `www-data`, edit the unit before enabling it.
 If you use a `.env`, use `APP_HOST` and `APP_PORT` instead of `HOST` and `PORT` to avoid shell env conflicts.
+For production auth, set `AUTH_USERNAME`, `AUTH_PASSWORD_HASH`, and `APP_SECURE_COOKIE=true`.
+
+Example password hash generation with Python:
+
+```bash
+python3 -m pip install --user argon2-cffi
+python3 - <<'EOF'
+from argon2 import PasswordHasher
+print(PasswordHasher().hash("replace-with-a-strong-password"))
+EOF
+```
 
 Then start it:
 
