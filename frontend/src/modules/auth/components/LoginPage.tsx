@@ -7,17 +7,17 @@ type LoginPageProps = {
   errorMessage: string
   isSubmitting: boolean
   onToggleTheme: () => void
-  onLogin: (username: string, password: string) => Promise<string | null>
+  onLogin: (identifier: string, password: string) => Promise<string | null>
 }
 
 export function LoginPage({ theme, errorMessage, isSubmitting, onToggleTheme, onLogin }: LoginPageProps) {
-  const [username, setUsername] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
   const [localError, setLocalError] = useState('')
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    const error = await onLogin(username, password)
+    const error = await onLogin(identifier, password)
     setLocalError(error ?? '')
   }
 
@@ -43,13 +43,13 @@ export function LoginPage({ theme, errorMessage, isSubmitting, onToggleTheme, on
 
           <form className="login-form" onSubmit={handleSubmit}>
             <label>
-              用户名
+              手机号或邮箱
               <input
                 autoComplete="username"
                 disabled={isSubmitting}
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder="输入用户名"
+                value={identifier}
+                onChange={(event) => setIdentifier(event.target.value)}
+                placeholder="输入手机号或邮箱"
               />
             </label>
             <label>

@@ -11,7 +11,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use auth::{AuthError, AuthService, set_cookie_header};
+use auth::{AuthError, AuthService, session_info_from_user, set_cookie_header};
 use axum::{
     Json, Router,
     extract::{Path, Query, State},
@@ -20,12 +20,13 @@ use axum::{
         header::{CONTENT_DISPOSITION, CONTENT_TYPE},
     },
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use google_ai::GoogleAiClient;
 use models::{
-    BulkDeleteRequest, BulkDeleteResponse, GenerateGuideRequest, GenerateGuideResponse, GuideInput,
-    GuideListResponse, GuidesQuery, HealthResponse, ImportRequest, LoginRequest, SessionResponse,
+    BulkDeleteRequest, BulkDeleteResponse, ChangePasswordRequest, CreateUserRequest,
+    GenerateGuideRequest, GenerateGuideResponse, GuideInput, GuideListResponse, GuidesQuery,
+    HealthResponse, ImportRequest, LoginRequest, SessionResponse, UpdateUserRequest,
 };
 use python_semantic::rank_guides;
 use search::{filter_region, sort_semantic_guides};
@@ -66,6 +67,10 @@ async fn main() {
         .route("/api/auth/login", post(login))
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/session", get(get_session))
+        .route("/api/auth/change-password", post(change_password))
+        .route("/api/users", get(list_users).post(create_user))
+        .route("/api/users/{id}", put(update_user))
+        .route("/api/users/{id}/deactivate", post(deactivate_user))
         .route("/api/guides", get(list_guides).post(create_guide))
         .route("/api/guides/export.csv", get(export_guides))
         .route("/api/guides/duplicates", get(list_duplicate_groups))
@@ -104,7 +109,7 @@ async fn login(
 ) -> AppResult<(HeaderMap, Json<SessionResponse>)> {
     let (user, cookie) = state
         .auth
-        .login(&headers, &request.username, &request.password)
+        .login(&headers, &request.identifier, &request.password)
         .map_err(auth_error)?;
     let mut headers = HeaderMap::new();
     set_cookie_header(&mut headers, cookie);
@@ -113,7 +118,7 @@ async fn login(
         headers,
         Json(SessionResponse {
             authenticated: true,
-            username: Some(user.username),
+            user: Some(session_info_from_user(user)),
         }),
     ))
 }
@@ -130,7 +135,7 @@ async fn logout(
         response_headers,
         Json(SessionResponse {
             authenticated: false,
-            username: None,
+            user: None,
         }),
     ))
 }
@@ -146,8 +151,82 @@ async fn get_session(
 
     Ok(Json(SessionResponse {
         authenticated: user.is_some(),
-        username: user.map(|session| session.username),
+        user: user.map(session_info_from_user),
     }))
+}
+
+async fn change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ChangePasswordRequest>,
+) -> AppResult<StatusCode> {
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    state
+        .auth
+        .change_password(&user.id, &request.current_password, &request.new_password)
+        .map_err(auth_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_users(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<Vec<models::UserRecord>>> {
+    state.auth.require_admin(&headers).map_err(auth_error)?;
+    let users = state.auth.list_users().map_err(internal_error_from)?;
+    Ok(Json(users))
+}
+
+async fn create_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateUserRequest>,
+) -> AppResult<(StatusCode, Json<models::UserRecord>)> {
+    state.auth.require_admin(&headers).map_err(auth_error)?;
+    let user = state
+        .auth
+        .create_user(
+            request.name,
+            request.phone,
+            request.email,
+            request.role,
+            request.password,
+        )
+        .map_err(auth_error)?;
+    Ok((StatusCode::CREATED, Json(user)))
+}
+
+async fn update_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(request): Json<UpdateUserRequest>,
+) -> AppResult<Json<models::UserRecord>> {
+    state.auth.require_admin(&headers).map_err(auth_error)?;
+    let user = state
+        .auth
+        .update_user(
+            &id,
+            request.name,
+            request.phone,
+            request.email,
+            request.role,
+        )
+        .map_err(auth_error)?;
+    Ok(Json(user))
+}
+
+async fn deactivate_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> AppResult<Json<models::UserRecord>> {
+    let admin = state.auth.require_admin(&headers).map_err(auth_error)?;
+    let user = state
+        .auth
+        .deactivate_user(&admin.id, &id)
+        .map_err(auth_error)?;
+    Ok(Json(user))
 }
 
 async fn list_guides(
@@ -366,6 +445,13 @@ fn unauthorized(message: String) -> AppError {
     }
 }
 
+fn forbidden(message: String) -> AppError {
+    AppError {
+        status: StatusCode::FORBIDDEN,
+        message,
+    }
+}
+
 fn too_many_requests(message: String) -> AppError {
     AppError {
         status: StatusCode::TOO_MANY_REQUESTS,
@@ -376,7 +462,9 @@ fn too_many_requests(message: String) -> AppError {
 fn auth_error(error: AuthError) -> AppError {
     match error {
         AuthError::Unauthorized(message) => unauthorized(message),
+        AuthError::Forbidden(message) => forbidden(message),
         AuthError::TooManyRequests(message) => too_many_requests(message),
+        AuthError::BadRequest(message) => bad_request(message),
         AuthError::Internal(message) => internal_error_from(message),
     }
 }

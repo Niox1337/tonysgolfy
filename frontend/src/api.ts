@@ -41,9 +41,28 @@ export type DuplicateGroup = {
   items: GuideRecord[]
 }
 
+export type UserRole = 'judge' | 'employee' | 'admin'
+
+export type SessionUser = {
+  id: string
+  name: string
+  role: UserRole
+}
+
 export type SessionResponse = {
   authenticated: boolean
-  username: string | null
+  user: SessionUser | null
+}
+
+export type UserRecord = {
+  id: string
+  name: string
+  phone: string | null
+  email: string | null
+  role: UserRole
+  active: boolean
+  createdAt: string
+  updatedAt: string
 }
 
 type GuideListResponse = {
@@ -110,6 +129,10 @@ async function requestJson<T>(path: string, init?: RequestInit, timeoutMs = 1500
     throw new ApiError(response.status, payload?.error ?? '请求失败。')
   }
 
+  if (response.status === 204) {
+    return undefined as T
+  }
+
   return response.json() as Promise<T>
 }
 
@@ -133,15 +156,57 @@ export async function getSession() {
   return requestJson<SessionResponse>('/api/auth/session')
 }
 
-export async function login(username: string, password: string) {
+export async function login(identifier: string, password: string) {
   return requestJson<SessionResponse>('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ identifier, password }),
   })
 }
 
 export async function logout() {
   return requestJson<SessionResponse>('/api/auth/logout', {
+    method: 'POST',
+  })
+}
+
+export async function changePassword(currentPassword: string, newPassword: string) {
+  return requestJson<void>('/api/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  })
+}
+
+export async function listUsers() {
+  return requestJson<UserRecord[]>('/api/users')
+}
+
+export async function createUser(input: {
+  name: string
+  phone?: string
+  email?: string
+  role: UserRole
+  password: string
+}) {
+  return requestJson<UserRecord>('/api/users', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function updateUser(id: string, input: {
+  name: string
+  phone?: string
+  email?: string
+  role: UserRole
+}) {
+  return requestJson<UserRecord>(`/api/users/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deactivateUser(id: string) {
+  return requestJson<UserRecord>(`/api/users/${id}/deactivate`, {
     method: 'POST',
   })
 }

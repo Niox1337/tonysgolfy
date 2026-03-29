@@ -2,18 +2,23 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useState } from 
 import type { ChangeEvent } from 'react'
 import {
   ApiError,
+  changePassword,
   createGuide,
+  createUser,
+  deactivateUser,
   deleteGuides,
   downloadGuidesCsv,
   generateGuide,
   getSession,
   importGuides,
-  login,
   listDuplicateGroups,
   listGuides,
+  listUsers,
+  login,
   logout,
   previewDuplicates,
   updateGuide,
+  updateUser,
 } from './api'
 import type {
   DuplicateGroup,
@@ -22,10 +27,14 @@ import type {
   GuideRecord,
   ImportAudit,
   SearchMode,
+  SessionUser,
   SortMode,
+  UserRecord,
+  UserRole,
 } from './api'
+import { ChangePasswordModal } from './modules/auth/components/ChangePasswordModal'
 import { LoginPage } from './modules/auth/components/LoginPage'
-import { LOGIN_ROUTE, TABLE_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
+import { LOGIN_ROUTE, TABLE_ROUTE, USERS_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
 import { CreateGuideModal } from './modules/guides/components/CreateGuideModal'
 import { EditGuideModal } from './modules/guides/components/EditGuideModal'
 import { GuideDetailPanel } from './modules/guides/components/GuideDetailPanel'
@@ -43,23 +52,44 @@ import {
   toFormState,
   toGuideInput,
 } from './modules/guides/utils'
+import { UserManagementPage } from './modules/users/components/UserManagementPage'
 import './App.css'
+
+const initialCreateUserForm = {
+  name: '',
+  phone: '',
+  email: '',
+  role: 'employee' as UserRole,
+  password: '',
+}
+
+const initialEditUserForm = {
+  id: null as string | null,
+  name: '',
+  phone: '',
+  email: '',
+  role: 'employee' as UserRole,
+}
 
 function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme())
   const [currentRoute, setCurrentRoute] = useState(() => normalizeRoute(window.location.pathname))
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [sessionUser, setSessionUser] = useState<SessionUser | null>(null)
   const [isCheckingSession, setIsCheckingSession] = useState(true)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
   const [loginError, setLoginError] = useState('')
   const [records, setRecords] = useState<GuideRecord[]>([])
   const [allRecords, setAllRecords] = useState<GuideRecord[]>([])
+  const [users, setUsers] = useState<UserRecord[]>([])
   const [form, setForm] = useState<FormState>(initialForm)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false)
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingForm, setEditingForm] = useState<FormState>(initialForm)
+  const [createUserForm, setCreateUserForm] = useState(initialCreateUserForm)
+  const [editUserForm, setEditUserForm] = useState(initialEditUserForm)
   const [searchTerm, setSearchTerm] = useState('')
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [regionFilter, setRegionFilter] = useState<RegionFilter>('all')
@@ -71,11 +101,14 @@ function App() {
   const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([])
   const [importMessage, setImportMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
+  const [passwordChangeError, setPasswordChangeError] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [isGeneratingGuide, setIsGeneratingGuide] = useState(false)
   const [reloadToken, setReloadToken] = useState(0)
 
   const deferredSearchTerm = useDeferredValue(searchTerm)
+  const isAuthenticated = sessionUser !== null
+  const isAdmin = sessionUser?.role === 'admin'
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -98,10 +131,10 @@ function App() {
       try {
         const session = await getSession()
         if (cancelled) return
-        setIsAuthenticated(session.authenticated)
+        setSessionUser(session.user)
       } catch {
         if (!cancelled) {
-          setIsAuthenticated(false)
+          setSessionUser(null)
         }
       } finally {
         if (!cancelled) {
@@ -120,18 +153,22 @@ function App() {
   useEffect(() => {
     if (isCheckingSession) return
 
-    const targetRoute = isAuthenticated ? TABLE_ROUTE : LOGIN_ROUTE
-    const routeExists = window.location.pathname === LOGIN_ROUTE || window.location.pathname === TABLE_ROUTE
-    const shouldRedirect =
-      !routeExists ||
-      currentRoute !== targetRoute ||
-      (!isAuthenticated && currentRoute === TABLE_ROUTE) ||
-      (isAuthenticated && currentRoute === LOGIN_ROUTE)
-
-    if (shouldRedirect) {
-      navigateTo(targetRoute, true)
+    if (!isAuthenticated) {
+      if (currentRoute !== LOGIN_ROUTE) {
+        navigateTo(LOGIN_ROUTE, true)
+      }
+      return
     }
-  }, [currentRoute, isAuthenticated, isCheckingSession])
+
+    if (currentRoute === LOGIN_ROUTE) {
+      navigateTo(TABLE_ROUTE, true)
+      return
+    }
+
+    if (currentRoute === USERS_ROUTE && !isAdmin) {
+      navigateTo(TABLE_ROUTE, true)
+    }
+  }, [currentRoute, isAdmin, isAuthenticated, isCheckingSession])
 
   useEffect(() => {
     if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE) {
@@ -210,6 +247,33 @@ function App() {
   }, [currentRoute, deferredSearchTerm, isAuthenticated, isCheckingSession, regionFilter, reloadToken, searchMode, sortMode])
 
   useEffect(() => {
+    if (isCheckingSession || !isAuthenticated || currentRoute !== USERS_ROUTE || !isAdmin) {
+      return
+    }
+
+    let cancelled = false
+
+    async function loadUserData() {
+      try {
+        const response = await listUsers()
+        if (!cancelled) {
+          setUsers(response)
+        }
+      } catch (error) {
+        if (!cancelled) {
+          handleApiError(error, '加载用户列表失败。')
+        }
+      }
+    }
+
+    loadUserData()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentRoute, isAdmin, isAuthenticated, isCheckingSession, reloadToken])
+
+  useEffect(() => {
     if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE) return
 
     if (!activeId && allRecords.length > 0) {
@@ -275,6 +339,14 @@ function App() {
     setEditingForm((current) => ({ ...current, [key]: value }))
   }
 
+  function updateCreateUserForm(field: 'name' | 'phone' | 'email' | 'role' | 'password', value: string) {
+    setCreateUserForm((current) => ({ ...current, [field]: value }))
+  }
+
+  function updateEditUserForm(field: 'name' | 'phone' | 'email' | 'role', value: string) {
+    setEditUserForm((current) => ({ ...current, [field]: value }))
+  }
+
   async function refreshData() {
     startTransition(() => {
       setReloadToken((current) => current + 1)
@@ -283,12 +355,18 @@ function App() {
 
   function handleApiError(error: unknown, fallbackMessage: string) {
     if (error instanceof ApiError && error.status === 401) {
-      setIsAuthenticated(false)
+      setSessionUser(null)
       setLoginError('登录状态已失效，请重新登录。')
       setErrorMessage('')
+      setPasswordChangeError('')
       setIsCreateModalOpen(false)
       setEditingId(null)
+      setIsChangePasswordOpen(false)
       return true
+    }
+
+    if (error instanceof ApiError && error.status === 403 && currentRoute === USERS_ROUTE) {
+      navigateTo(TABLE_ROUTE, true)
     }
 
     setErrorMessage(error instanceof Error ? error.message : fallbackMessage)
@@ -486,17 +564,17 @@ function App() {
     }
   }
 
-  async function handleLogin(username: string, password: string) {
-    if (!username.trim() || !password.trim()) {
-      return '请输入用户名和密码。'
+  async function handleLogin(identifier: string, password: string) {
+    if (!identifier.trim() || !password.trim()) {
+      return '请输入手机号或邮箱，以及密码。'
     }
 
     try {
       setIsLoggingIn(true)
       setLoginError('')
       setErrorMessage('')
-      const session = await login(username, password)
-      setIsAuthenticated(session.authenticated)
+      const session = await login(identifier, password)
+      setSessionUser(session.user)
       navigateTo(TABLE_ROUTE)
       return null
     } catch (error) {
@@ -512,15 +590,92 @@ function App() {
     try {
       await logout()
     } catch {
-      // Even if logout fails server-side, clear the client auth state so the user can re-authenticate.
+      // Ignore logout transport errors and clear local state anyway.
     } finally {
-      setIsAuthenticated(false)
+      setSessionUser(null)
       setLoginError('')
       setErrorMessage('')
+      setPasswordChangeError('')
       setSelectedIds([])
+      setUsers([])
       setIsCreateModalOpen(false)
       setEditingId(null)
+      setIsChangePasswordOpen(false)
       navigateTo(LOGIN_ROUTE)
+    }
+  }
+
+  async function handleCreateUser() {
+    try {
+      setErrorMessage('')
+      await createUser({
+        name: createUserForm.name,
+        phone: createUserForm.phone || undefined,
+        email: createUserForm.email || undefined,
+        role: createUserForm.role,
+        password: createUserForm.password,
+      })
+      setCreateUserForm(initialCreateUserForm)
+      await refreshData()
+    } catch (error) {
+      handleApiError(error, '注册用户失败。')
+    }
+  }
+
+  function handleStartEditingUser(user: UserRecord) {
+    setEditUserForm({
+      id: user.id,
+      name: user.name,
+      phone: user.phone ?? '',
+      email: user.email ?? '',
+      role: user.role,
+    })
+  }
+
+  function handleCancelEditingUser() {
+    setEditUserForm(initialEditUserForm)
+  }
+
+  async function handleSaveEditingUser() {
+    if (!editUserForm.id) return
+
+    try {
+      setErrorMessage('')
+      await updateUser(editUserForm.id, {
+        name: editUserForm.name,
+        phone: editUserForm.phone || undefined,
+        email: editUserForm.email || undefined,
+        role: editUserForm.role,
+      })
+      setEditUserForm(initialEditUserForm)
+      await refreshData()
+    } catch (error) {
+      handleApiError(error, '更新用户失败。')
+    }
+  }
+
+  async function handleDeactivateUser(id: string) {
+    try {
+      setErrorMessage('')
+      await deactivateUser(id)
+      if (editUserForm.id === id) {
+        setEditUserForm(initialEditUserForm)
+      }
+      await refreshData()
+    } catch (error) {
+      handleApiError(error, '注销用户失败。')
+    }
+  }
+
+  async function handleChangePassword(currentPassword: string, newPassword: string) {
+    try {
+      setPasswordChangeError('')
+      await changePassword(currentPassword, newPassword)
+      return null
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '修改密码失败。'
+      setPasswordChangeError(message)
+      return message
     }
   }
 
@@ -551,55 +706,80 @@ function App() {
     <main className="app-shell">
       <HeroPanel
         theme={theme}
+        currentRoute={currentRoute === USERS_ROUTE ? 'users' : 'table'}
+        currentUserName={sessionUser.name}
+        currentUserRole={sessionUser.role}
         allRecordsCount={allRecords.length}
         featuredCount={featuredCount}
         onToggleTheme={() => setTheme((current) => (current === 'day' ? 'night' : 'day'))}
+        onOpenTable={() => navigateTo(TABLE_ROUTE)}
+        onOpenUsers={() => navigateTo(USERS_ROUTE)}
+        onOpenChangePassword={() => {
+          setPasswordChangeError('')
+          setIsChangePasswordOpen(true)
+        }}
         onLogout={handleLogout}
       />
 
-      <section className="workspace-grid">
-        <GuideFormPanel
-          guidePrompt={guidePrompt}
-          generatedGuide={generatedGuide}
-          importMessage={importMessage}
+      {currentRoute === USERS_ROUTE && isAdmin ? (
+        <UserManagementPage
+          users={users}
+          createForm={createUserForm}
+          editForm={editUserForm}
           errorMessage={errorMessage}
-          isGeneratingGuide={isGeneratingGuide}
-          importAudits={importAudits}
-          onGuidePromptChange={setGuidePrompt}
-          onOpenCreateModal={() => {
-            setErrorMessage('')
-            setIsCreateModalOpen(true)
-          }}
-          onImport={handleImport}
-          onExportCsv={handleExport}
-          onExportExcel={handleExportExcel}
-          onGenerateGuide={handleGenerateGuide}
+          onCreateFormChange={updateCreateUserForm}
+          onEditFormChange={updateEditUserForm}
+          onCreateUser={handleCreateUser}
+          onStartEditing={handleStartEditingUser}
+          onSaveEdit={handleSaveEditingUser}
+          onCancelEdit={handleCancelEditingUser}
+          onDeactivate={handleDeactivateUser}
         />
+      ) : (
+        <section className="workspace-grid">
+          <GuideFormPanel
+            guidePrompt={guidePrompt}
+            generatedGuide={generatedGuide}
+            importMessage={importMessage}
+            errorMessage={errorMessage}
+            isGeneratingGuide={isGeneratingGuide}
+            importAudits={importAudits}
+            onGuidePromptChange={setGuidePrompt}
+            onOpenCreateModal={() => {
+              setErrorMessage('')
+              setIsCreateModalOpen(true)
+            }}
+            onImport={handleImport}
+            onExportCsv={handleExport}
+            onExportExcel={handleExportExcel}
+            onGenerateGuide={handleGenerateGuide}
+          />
 
-        <GuideTablePanel
-          searchTerm={searchTerm}
-          searchMode={searchMode}
-          regionFilter={regionFilter}
-          sortMode={sortMode}
-          regionOptions={regionOptions}
-          records={records}
-          selectedIds={selectedIds}
-          activeId={activeId}
-          isLoading={isLoading}
-          allVisibleSelected={allVisibleSelected}
-          onSearchTermChange={setSearchTerm}
-          onSearchModeChange={setSearchMode}
-          onRegionFilterChange={setRegionFilter}
-          onSortModeChange={setSortMode}
-          onSelectAll={handleSelectAll}
-          onDeleteSelected={handleDeleteSelected}
-          onToggleSelect={handleToggleSelect}
-          onActiveChange={setActiveId}
-          onStartEditing={startEditing}
-        />
+          <GuideTablePanel
+            searchTerm={searchTerm}
+            searchMode={searchMode}
+            regionFilter={regionFilter}
+            sortMode={sortMode}
+            regionOptions={regionOptions}
+            records={records}
+            selectedIds={selectedIds}
+            activeId={activeId}
+            isLoading={isLoading}
+            allVisibleSelected={allVisibleSelected}
+            onSearchTermChange={setSearchTerm}
+            onSearchModeChange={setSearchMode}
+            onRegionFilterChange={setRegionFilter}
+            onSortModeChange={setSortMode}
+            onSelectAll={handleSelectAll}
+            onDeleteSelected={handleDeleteSelected}
+            onToggleSelect={handleToggleSelect}
+            onActiveChange={setActiveId}
+            onStartEditing={startEditing}
+          />
 
-        <GuideDetailPanel activeRecord={activeRecord} duplicateGroups={duplicateGroups} />
-      </section>
+          <GuideDetailPanel activeRecord={activeRecord} duplicateGroups={duplicateGroups} />
+        </section>
+      )}
 
       <CreateGuideModal
         isOpen={isCreateModalOpen}
@@ -619,6 +799,16 @@ function App() {
         onUpdateEditingForm={updateEditingForm}
         onSave={saveEditing}
         onCancel={cancelEditing}
+      />
+
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        errorMessage={passwordChangeError}
+        onClose={() => {
+          setIsChangePasswordOpen(false)
+          setPasswordChangeError('')
+        }}
+        onSubmit={handleChangePassword}
       />
     </main>
   )

@@ -105,11 +105,15 @@
   max-width: 62ch;
 }
 
+.hero-meta {
+  margin-top: 8px;
+}
+
 .hero-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(136px, 1fr));
   gap: 12px;
-  min-width: min(100%, 340px);
+  min-width: min(100%, 360px);
   align-content: start;
 }
 
@@ -184,6 +188,18 @@
   align-items: start;
 }
 
+.users-grid {
+  grid-template-columns: minmax(320px, 380px) minmax(0, 1fr);
+}
+
+.users-table-panel {
+  min-width: 0;
+}
+
+.users-table-wrap {
+  height: clamp(420px, 62vh, 760px);
+}
+
 .panel,
 .subpanel,
 .detail-card {
@@ -230,7 +246,8 @@
 }
 
 input,
-textarea {
+textarea,
+select {
   width: 100%;
   box-sizing: border-box;
   border: 1px solid var(--line);
@@ -244,7 +261,8 @@ textarea {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 4px var(--accent-soft);
 }
@@ -523,6 +541,10 @@ tbody tr:focus-within .row-edit,
   justify-content: flex-end;
   gap: 12px;
   margin-top: 20px;
+}
+
+.modal-feedback {
+  margin-top: 16px;
 }
 
 .detail-card dl {
