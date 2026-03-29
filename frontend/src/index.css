@@ -1,4 +1,5 @@
 :root {
+  font-size: 15px;
   --font-sans: 'Manrope', 'Segoe UI', sans-serif;
   --font-display: 'Space Grotesk', 'Segoe UI', sans-serif;
   --text: #183126;
@@ -21,7 +22,7 @@
     0 8px 18px rgba(15, 23, 42, 0.08);
   color: var(--text);
   background: #f2f7ef;
-  font: 16px/1.5 var(--font-sans);
+  font: 1rem/1.5 var(--font-sans);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -104,18 +105,18 @@ h3 {
 }
 
 h1 {
-  font-size: clamp(2.4rem, 5vw, 4.4rem);
+  font-size: clamp(2.2rem, 4.6vw, 4rem);
   line-height: 0.98;
   margin: 10px 0 16px;
 }
 
 h2 {
-  font-size: 1.35rem;
+  font-size: 1.25rem;
   margin-bottom: 4px;
 }
 
 h3 {
-  font-size: 1rem;
+  font-size: 0.96rem;
 }
 
 button,

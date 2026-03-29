@@ -345,11 +345,12 @@ td {
 thead th {
   position: sticky;
   top: 0;
-  background: color-mix(in srgb, var(--field) 92%, var(--panel) 8%);
-  color: var(--muted);
-  font-size: 0.86rem;
+  background: var(--panel-strong);
+  color: var(--heading);
+  font-size: 0.82rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+  opacity: 1;
 }
 
 tbody tr {
