@@ -65,7 +65,11 @@ pub fn score_similarity_record_input(record: &GuideRecord, input: &GuideInput) -
 pub fn filter_and_sort(records: &[GuideRecord], query: &GuidesQuery) -> Vec<GuideRecord> {
     let mut guides = filter_region(records, query.region.as_deref());
 
-    if let Some(search) = query.search.as_ref().filter(|search| !search.trim().is_empty()) {
+    if let Some(search) = query
+        .search
+        .as_ref()
+        .filter(|search| !search.trim().is_empty())
+    {
         if matches!(query.search_mode.unwrap_or_default(), SearchMode::Keyword) {
             guides = keyword_filter(&guides, search);
         }
@@ -109,8 +113,12 @@ pub fn keyword_filter(records: &[GuideRecord], search: &str) -> Vec<GuideRecord>
 
 pub fn sort_guides(guides: &mut [GuideRecord], sort_mode: SortMode) {
     match sort_mode {
-        SortMode::UpdatedDesc => guides.sort_by(|left, right| right.updated_at.cmp(&left.updated_at)),
-        SortMode::UpdatedAsc => guides.sort_by(|left, right| left.updated_at.cmp(&right.updated_at)),
+        SortMode::UpdatedDesc => {
+            guides.sort_by(|left, right| right.updated_at.cmp(&left.updated_at))
+        }
+        SortMode::UpdatedAsc => {
+            guides.sort_by(|left, right| left.updated_at.cmp(&right.updated_at))
+        }
         SortMode::FeeDesc => guides.sort_by(|left, right| right.green_fee.cmp(&left.green_fee)),
         SortMode::FeeAsc => guides.sort_by(|left, right| left.green_fee.cmp(&right.green_fee)),
         SortMode::NameAsc => guides.sort_by(|left, right| left.course_name.cmp(&right.course_name)),
@@ -125,7 +133,11 @@ pub fn sort_semantic_guides(guides: &mut [(GuideRecord, f32)], sort_mode: SortMo
     });
 }
 
-fn compare_guides(left: &GuideRecord, right: &GuideRecord, sort_mode: SortMode) -> std::cmp::Ordering {
+fn compare_guides(
+    left: &GuideRecord,
+    right: &GuideRecord,
+    sort_mode: SortMode,
+) -> std::cmp::Ordering {
     match sort_mode {
         SortMode::UpdatedDesc => right.updated_at.cmp(&left.updated_at),
         SortMode::UpdatedAsc => left.updated_at.cmp(&right.updated_at),
@@ -135,7 +147,10 @@ fn compare_guides(left: &GuideRecord, right: &GuideRecord, sort_mode: SortMode) 
     }
 }
 
-pub fn duplicate_preview(records: &[GuideRecord], input: &GuideInput) -> Vec<DuplicatePreviewMatch> {
+pub fn duplicate_preview(
+    records: &[GuideRecord],
+    input: &GuideInput,
+) -> Vec<DuplicatePreviewMatch> {
     let fingerprint = fingerprint_for_input(input);
     let mut entries = records
         .iter()
@@ -143,7 +158,11 @@ pub fn duplicate_preview(records: &[GuideRecord], input: &GuideInput) -> Vec<Dup
         .map(|guide| {
             let exact = fingerprint_for_record(&guide) == fingerprint;
             let score = score_similarity_record_input(&guide, input);
-            DuplicatePreviewMatch { guide, exact, score }
+            DuplicatePreviewMatch {
+                guide,
+                exact,
+                score,
+            }
         })
         .filter(|entry| entry.exact || entry.score >= 0.45)
         .collect::<Vec<_>>();
@@ -217,8 +236,8 @@ pub fn build_import_audits(existing: &[GuideRecord], inserted: &[GuideRecord]) -
 
 #[cfg(test)]
 mod tests {
+    use super::duplicate_preview;
     use crate::models::{GuideInput, GuideRecord};
-    use super::{duplicate_preview};
 
     fn sample_record() -> GuideRecord {
         GuideRecord {

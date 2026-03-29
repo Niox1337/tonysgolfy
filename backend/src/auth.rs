@@ -6,12 +6,12 @@ use std::{
 };
 
 use argon2::{
-    password_hash::{PasswordHash, PasswordVerifier},
     Argon2,
+    password_hash::{PasswordHash, PasswordVerifier},
 };
 use axum::http::{
-    header::{COOKIE, SET_COOKIE},
     HeaderMap, HeaderValue,
+    header::{COOKIE, SET_COOKIE},
 };
 use uuid::Uuid;
 
@@ -65,11 +65,16 @@ impl AuthService {
         let password_hash = required_env("AUTH_PASSWORD_HASH")?;
         validate_password_hash(&password_hash)?;
 
-        let cookie_name = env::var("SESSION_COOKIE_NAME")
-            .unwrap_or_else(|_| "tonysgolfy_session".to_string());
+        let cookie_name =
+            env::var("SESSION_COOKIE_NAME").unwrap_or_else(|_| "tonysgolfy_session".to_string());
         let secure_cookie = env::var("APP_SECURE_COOKIE")
             .ok()
-            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .unwrap_or(false);
 
         Ok(Self {
@@ -102,7 +107,8 @@ impl AuthService {
         let fingerprint = client_fingerprint(headers);
         self.enforce_rate_limit(&fingerprint)?;
 
-        let verified = username.trim() == self.username && verify_password_hash(&self.password_hash, password);
+        let verified =
+            username.trim() == self.username && verify_password_hash(&self.password_hash, password);
 
         if !verified {
             self.register_failed_attempt(&fingerprint)?;
@@ -129,8 +135,9 @@ impl AuthService {
             );
 
         let cookie = self.build_session_cookie(&session_id, Some(self.session_ttl.as_secs()));
-        let header = HeaderValue::from_str(&cookie)
-            .map_err(|error| AuthError::Internal(format!("failed to encode session cookie: {error}")))?;
+        let header = HeaderValue::from_str(&cookie).map_err(|error| {
+            AuthError::Internal(format!("failed to encode session cookie: {error}"))
+        })?;
 
         Ok((user, header))
     }
@@ -173,7 +180,8 @@ impl AuthService {
         }
 
         let cookie = self.build_session_cookie("", Some(0));
-        HeaderValue::from_str(&cookie).map_err(|error| format!("failed to encode session cookie: {error}"))
+        HeaderValue::from_str(&cookie)
+            .map_err(|error| format!("failed to encode session cookie: {error}"))
     }
 
     fn build_session_cookie(&self, value: &str, max_age: Option<u64>) -> String {
@@ -210,7 +218,10 @@ impl AuthService {
             .map_err(|_| AuthError::Internal("failed to write login attempts".to_string()))?;
 
         attempts.retain(|_, state| {
-            state.blocked_until.map(|until| until > now).unwrap_or(false)
+            state
+                .blocked_until
+                .map(|until| until > now)
+                .unwrap_or(false)
                 || now.duration_since(state.window_started_at) <= self.login_window
         });
 
@@ -270,7 +281,8 @@ impl AuthService {
 }
 
 fn required_env(name: &str) -> Result<String, String> {
-    let value = env::var(name).map_err(|_| format!("missing required environment variable {name}"))?;
+    let value =
+        env::var(name).map_err(|_| format!("missing required environment variable {name}"))?;
     let trimmed = value.trim();
 
     if trimmed.is_empty()
@@ -279,7 +291,9 @@ fn required_env(name: &str) -> Result<String, String> {
             "..." | "your_username" | "your_password" | "your_password_hash"
         )
     {
-        return Err(format!("environment variable {name} is empty or still set to a placeholder"));
+        return Err(format!(
+            "environment variable {name} is empty or still set to a placeholder"
+        ));
     }
 
     Ok(trimmed.to_string())
@@ -324,7 +338,10 @@ fn read_cookie<'a>(headers: &'a HeaderMap, target_name: &str) -> Option<&'a str>
 
 fn client_fingerprint(headers: &HeaderMap) -> String {
     for header_name in ["x-forwarded-for", "x-real-ip", "cf-connecting-ip"] {
-        if let Some(value) = headers.get(header_name).and_then(|header| header.to_str().ok()) {
+        if let Some(value) = headers
+            .get(header_name)
+            .and_then(|header| header.to_str().ok())
+        {
             let first = value.split(',').next().unwrap_or_default().trim();
             if !first.is_empty() {
                 return first.to_string();
@@ -342,21 +359,29 @@ pub fn set_cookie_header(headers: &mut HeaderMap, value: HeaderValue) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const SAMPLE_HASH: &str =
-        "$argon2id$v=19$m=19456,t=2,p=1$YWJjZGVmZ2hpamtsbW5vcA$8hbMwzmXT14GQv9rfFv6QTaTMaMIB22WJfL2HKWl3mQ";
+    use argon2::password_hash::{PasswordHasher, SaltString};
 
     #[test]
     fn parses_cookie_from_header_map() {
         let mut headers = HeaderMap::new();
-        headers.insert(COOKIE, HeaderValue::from_static("foo=bar; tonysgolfy_session=abc123"));
+        headers.insert(
+            COOKIE,
+            HeaderValue::from_static("foo=bar; tonysgolfy_session=abc123"),
+        );
 
         assert_eq!(read_cookie(&headers, "tonysgolfy_session"), Some("abc123"));
     }
 
     #[test]
     fn validates_known_hash() {
-        assert!(verify_password_hash(SAMPLE_HASH, "password123"));
-        assert!(!verify_password_hash(SAMPLE_HASH, "wrong-password"));
+        let salt =
+            SaltString::encode_b64(b"tonysgolfy-test-salt").expect("salt encoding should succeed");
+        let hash = Argon2::default()
+            .hash_password("password123".as_bytes(), &salt)
+            .expect("hash generation should succeed")
+            .to_string();
+
+        assert!(verify_password_hash(&hash, "password123"));
+        assert!(!verify_password_hash(&hash, "wrong-password"));
     }
 }

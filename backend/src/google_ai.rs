@@ -130,7 +130,11 @@ impl GoogleAiClient {
 用户需求：\n{}\n\n\
 现有球场数据：\n{}",
             user_prompt.trim(),
-            if context.is_empty() { "当前没有球场数据。".to_string() } else { context }
+            if context.is_empty() {
+                "当前没有球场数据。".to_string()
+            } else {
+                context
+            }
         );
 
         let response = self
@@ -153,7 +157,9 @@ impl GoogleAiClient {
                 .text()
                 .await
                 .unwrap_or_else(|_| "failed to read error body".to_string());
-            return Err(format!("Google AI Studio request failed with {status}: {body}"));
+            return Err(format!(
+                "Google AI Studio request failed with {status}: {body}"
+            ));
         }
 
         let payload: GenerateContentResponse = response

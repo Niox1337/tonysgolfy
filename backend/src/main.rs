@@ -11,23 +11,22 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use auth::{AuthError, AuthService, set_cookie_header};
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::{
-        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
         HeaderMap, HeaderValue, StatusCode,
+        header::{CONTENT_DISPOSITION, CONTENT_TYPE},
     },
     response::{IntoResponse, Response},
     routing::{delete, get, post},
-    Json, Router,
-};
-use auth::{set_cookie_header, AuthError, AuthService};
-use models::{
-    BulkDeleteRequest, BulkDeleteResponse, GenerateGuideRequest, GenerateGuideResponse,
-    GuideInput, GuideListResponse, GuidesQuery, HealthResponse, ImportRequest, LoginRequest,
-    SessionResponse,
 };
 use google_ai::GoogleAiClient;
+use models::{
+    BulkDeleteRequest, BulkDeleteResponse, GenerateGuideRequest, GenerateGuideResponse, GuideInput,
+    GuideListResponse, GuidesQuery, HealthResponse, ImportRequest, LoginRequest, SessionResponse,
+};
 use python_semantic::rank_guides;
 use search::{filter_region, sort_semantic_guides};
 use store::GuideStore;
@@ -51,9 +50,10 @@ type AppResult<T> = Result<T, AppError>;
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    let data_path = data_path();
-    let store = GuideStore::load(data_path).expect("failed to initialize guide store");
-    let google_ai = GoogleAiClient::from_env().expect("failed to initialize Google AI Studio client");
+    let database_path = database_path();
+    let store = GuideStore::load(database_path).expect("failed to initialize guide store");
+    let google_ai =
+        GoogleAiClient::from_env().expect("failed to initialize Google AI Studio client");
     let auth = AuthService::from_env().expect("failed to initialize auth service");
     let state = AppState {
         store: Arc::new(RwLock::new(store)),
@@ -88,7 +88,9 @@ async fn main() {
         .expect("failed to bind backend listener");
 
     println!("tonysgolfy backend listening on http://{bind_addr}");
-    axum::serve(listener, app).await.expect("backend server failed");
+    axum::serve(listener, app)
+        .await
+        .expect("backend server failed");
 }
 
 async fn health() -> Json<HealthResponse> {
@@ -137,7 +139,10 @@ async fn get_session(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<SessionResponse>> {
-    let user = state.auth.current_user(&headers).map_err(internal_error_from)?;
+    let user = state
+        .auth
+        .current_user(&headers)
+        .map_err(internal_error_from)?;
 
     Ok(Json(SessionResponse {
         authenticated: user.is_some(),
@@ -207,10 +212,13 @@ async fn update_guide(
         .write()
         .map_err(|_| internal_error("failed to write guide store"))?;
 
-    let updated = store.update(&id, input).map_err(bad_request)?.ok_or_else(|| AppError {
-        status: StatusCode::NOT_FOUND,
-        message: format!("guide {} not found", id),
-    })?;
+    let updated = store
+        .update(&id, input)
+        .map_err(bad_request)?
+        .ok_or_else(|| AppError {
+            status: StatusCode::NOT_FOUND,
+            message: format!("guide {} not found", id),
+        })?;
 
     Ok(Json(updated))
 }
@@ -225,7 +233,9 @@ async fn bulk_delete_guides(
         .store
         .write()
         .map_err(|_| internal_error("failed to write guide store"))?;
-    let deleted = store.bulk_delete(&request.ids).map_err(internal_error_from)?;
+    let deleted = store
+        .bulk_delete(&request.ids)
+        .map_err(internal_error_from)?;
 
     Ok(Json(BulkDeleteResponse { deleted }))
 }
@@ -310,7 +320,10 @@ async fn export_guides(
     let csv = store.export_csv(&query).map_err(internal_error_from)?;
 
     let mut headers = HeaderMap::new();
-    headers.insert(CONTENT_TYPE, HeaderValue::from_static("text/csv; charset=utf-8"));
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
     headers.insert(
         CONTENT_DISPOSITION,
         HeaderValue::from_static("attachment; filename=\"tonysgolfy-guides.csv\""),
@@ -319,11 +332,18 @@ async fn export_guides(
     Ok((headers, csv).into_response())
 }
 
-fn data_path() -> PathBuf {
+fn database_path() -> PathBuf {
+    if let Ok(path) = env::var("DATABASE_PATH") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return PathBuf::from(trimmed);
+        }
+    }
+
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("data")
-        .join("guides.json")
+        .join("guides.sqlite")
 }
 
 fn bind_addr() -> String {
@@ -393,7 +413,12 @@ fn list_guides_with_semantic_support(
 ) -> Result<Vec<models::GuideRecord>, String> {
     let search = query.search.as_deref().unwrap_or_default().trim();
 
-    if search.is_empty() || !matches!(query.search_mode.unwrap_or_default(), models::SearchMode::Semantic) {
+    if search.is_empty()
+        || !matches!(
+            query.search_mode.unwrap_or_default(),
+            models::SearchMode::Semantic
+        )
+    {
         return Ok(store.list(query));
     }
 
@@ -407,7 +432,12 @@ fn list_guides_with_semantic_support(
 
     let mut guides = ranked
         .into_iter()
-        .filter_map(|entry| by_id.get(&entry.id).cloned().map(|guide| (guide, entry.score)))
+        .filter_map(|entry| {
+            by_id
+                .get(&entry.id)
+                .cloned()
+                .map(|guide| (guide, entry.score))
+        })
         .collect::<Vec<_>>();
 
     sort_semantic_guides(&mut guides, query.sort.unwrap_or_default());

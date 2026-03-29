@@ -104,6 +104,7 @@ sudo cp /srv/tonysgolfy/deploy/tonysgolfy-backend.service /etc/systemd/system/to
 If your deployment user is not `www-data`, edit the unit before enabling it.
 If you use a `.env`, use `APP_HOST` and `APP_PORT` instead of `HOST` and `PORT` to avoid shell env conflicts.
 For production auth, set `AUTH_USERNAME`, `AUTH_PASSWORD_HASH`, and `APP_SECURE_COOKIE=true`.
+The backend now persists guides in a local SQLite file. If `DATABASE_PATH` does not exist, it creates the database and schema automatically on startup. On first boot it will also import legacy `data/guides.json` if that file is present.
 
 Example password hash generation with Python:
 

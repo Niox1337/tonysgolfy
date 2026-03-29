@@ -27,7 +27,11 @@ struct SemanticResponse {
     results: Vec<SemanticMatch>,
 }
 
-pub fn rank_guides(query: &str, guides: &[GuideRecord], threshold: f32) -> Result<Vec<SemanticMatch>, String> {
+pub fn rank_guides(
+    query: &str,
+    guides: &[GuideRecord],
+    threshold: f32,
+) -> Result<Vec<SemanticMatch>, String> {
     let script_path = semantic_script_path()?;
     let payload = serde_json::to_vec(&SemanticRequest {
         query,

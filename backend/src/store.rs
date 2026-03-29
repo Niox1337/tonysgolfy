@@ -4,6 +4,7 @@ use std::{
 };
 
 use chrono::Utc;
+use rusqlite::{Connection, params};
 use uuid::Uuid;
 
 use crate::{
@@ -16,25 +17,38 @@ use crate::{
 
 pub struct GuideStore {
     guides: Vec<GuideRecord>,
-    data_path: PathBuf,
+    database_path: PathBuf,
 }
 
 impl GuideStore {
-    pub fn load(data_path: PathBuf) -> Result<Self, String> {
-        if let Some(parent) = data_path.parent() {
+    pub fn load(database_path: PathBuf) -> Result<Self, String> {
+        if let Some(parent) = database_path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
 
-        let guides = if data_path.exists() {
-            let content = fs::read_to_string(&data_path).map_err(|error| error.to_string())?;
-            serde_json::from_str(&content).map_err(|error| error.to_string())?
+        let database_exists = database_path.exists();
+        let mut connection = open_database(&database_path)?;
+        initialize_schema(&connection)?;
+
+        let guides = if database_exists {
+            let loaded = load_guides(&connection)?;
+            if loaded.is_empty() {
+                let seeded = seed_guides();
+                insert_guides(&mut connection, &seeded)?;
+                seeded
+            } else {
+                loaded
+            }
         } else {
-            let guides = seed_guides();
-            persist_to_path(&data_path, &guides)?;
-            guides
+            let initial_guides = load_legacy_guides(&database_path)?.unwrap_or_else(seed_guides);
+            insert_guides(&mut connection, &initial_guides)?;
+            initial_guides
         };
 
-        Ok(Self { guides, data_path })
+        Ok(Self {
+            guides,
+            database_path,
+        })
     }
 
     pub fn list(&self, query: &GuidesQuery) -> Vec<GuideRecord> {
@@ -63,44 +77,60 @@ impl GuideStore {
             updated_at: Utc::now().to_rfc3339(),
         };
 
+        let mut connection = open_database(&self.database_path)?;
+        insert_guides(&mut connection, std::slice::from_ref(&guide))?;
+
         self.guides.insert(0, guide.clone());
-        self.persist()?;
         Ok(guide)
     }
 
     pub fn update(&mut self, id: &str, input: GuideInput) -> Result<Option<GuideRecord>, String> {
         validate_guide_input(&input)?;
 
-        if let Some(existing) = self.guides.iter_mut().find(|guide| guide.id == id) {
-            existing.course_name = input.course_name.trim().to_string();
-            existing.region = input.region.trim().to_string();
-            existing.course_code = input.course_code.trim().to_string();
-            existing.green_fee = input.green_fee;
-            existing.best_season = input.best_season.trim().to_string();
-            existing.notes = input.notes.trim().to_string();
-            existing.updated_at = Utc::now().to_rfc3339();
+        let Some(index) = self.guides.iter().position(|guide| guide.id == id) else {
+            return Ok(None);
+        };
 
-            let updated = existing.clone();
-            self.persist()?;
-            return Ok(Some(updated));
-        }
+        let mut updated = self.guides[index].clone();
+        updated.course_name = input.course_name.trim().to_string();
+        updated.region = input.region.trim().to_string();
+        updated.course_code = input.course_code.trim().to_string();
+        updated.green_fee = input.green_fee;
+        updated.best_season = input.best_season.trim().to_string();
+        updated.notes = input.notes.trim().to_string();
+        updated.updated_at = Utc::now().to_rfc3339();
 
-        Ok(None)
+        let connection = open_database(&self.database_path)?;
+        update_guide_row(&connection, &updated)?;
+
+        self.guides[index] = updated.clone();
+        Ok(Some(updated))
     }
 
     pub fn bulk_delete(&mut self, ids: &[String]) -> Result<usize, String> {
         let before = self.guides.len();
-        self.guides.retain(|guide| !ids.contains(&guide.id));
-        let deleted = before.saturating_sub(self.guides.len());
+        let ids_to_delete = ids
+            .iter()
+            .filter(|id| self.guides.iter().any(|guide| &guide.id == *id))
+            .cloned()
+            .collect::<Vec<_>>();
 
-        if deleted > 0 {
-            self.persist()?;
+        if ids_to_delete.is_empty() {
+            return Ok(0);
         }
 
-        Ok(deleted)
+        let connection = open_database(&self.database_path)?;
+        delete_guides_by_ids(&connection, &ids_to_delete)?;
+
+        self.guides
+            .retain(|guide| !ids_to_delete.contains(&guide.id));
+        Ok(before.saturating_sub(self.guides.len()))
     }
 
-    pub fn duplicate_preview(&self, input: &GuideInput) -> Result<Vec<crate::models::DuplicatePreviewMatch>, String> {
+    pub fn duplicate_preview(
+        &self,
+        input: &GuideInput,
+    ) -> Result<Vec<crate::models::DuplicatePreviewMatch>, String> {
         validate_guide_input(input)?;
         Ok(duplicate_preview(&self.guides, input))
     }
@@ -129,7 +159,6 @@ impl GuideStore {
             .collect::<Vec<_>>();
 
         let audits = build_import_audits(&self.guides, &imported);
-
         let existing_fingerprints = self
             .guides
             .iter()
@@ -141,15 +170,16 @@ impl GuideStore {
             .filter(|guide| !existing_fingerprints.contains(&fingerprint_for_record(guide)))
             .collect::<Vec<_>>();
 
-        let skipped_count = audits.len().saturating_sub(inserted.len());
-
-        for guide in inserted.iter().rev().cloned() {
-            self.guides.insert(0, guide);
-        }
-
         if !inserted.is_empty() {
-            self.persist()?;
+            let mut connection = open_database(&self.database_path)?;
+            insert_guides(&mut connection, &inserted)?;
+
+            for guide in inserted.iter().rev().cloned() {
+                self.guides.insert(0, guide);
+            }
         }
+
+        let skipped_count = audits.len().saturating_sub(inserted.len());
 
         Ok(ImportResponse {
             inserted_count: inserted.len(),
@@ -192,15 +222,148 @@ impl GuideStore {
         let bytes = writer.into_inner().map_err(|error| error.to_string())?;
         String::from_utf8(bytes).map_err(|error| error.to_string())
     }
-
-    fn persist(&self) -> Result<(), String> {
-        persist_to_path(&self.data_path, &self.guides)
-    }
 }
 
-fn persist_to_path(path: &Path, guides: &[GuideRecord]) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(guides).map_err(|error| error.to_string())?;
-    fs::write(path, json).map_err(|error| error.to_string())
+fn open_database(path: &Path) -> Result<Connection, String> {
+    Connection::open(path).map_err(|error| error.to_string())
+}
+
+fn initialize_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS guides (
+                id TEXT PRIMARY KEY,
+                course_name TEXT NOT NULL,
+                region TEXT NOT NULL,
+                course_code TEXT NOT NULL,
+                green_fee INTEGER NOT NULL,
+                best_season TEXT NOT NULL,
+                notes TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_guides_region ON guides(region);
+            CREATE INDEX IF NOT EXISTS idx_guides_updated_at ON guides(updated_at);
+            ",
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn load_guides(connection: &Connection) -> Result<Vec<GuideRecord>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT id, course_name, region, course_code, green_fee, best_season, notes, updated_at
+            FROM guides
+            ORDER BY updated_at DESC, rowid DESC
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(GuideRecord {
+                id: row.get(0)?,
+                course_name: row.get(1)?,
+                region: row.get(2)?,
+                course_code: row.get(3)?,
+                green_fee: row.get(4)?,
+                best_season: row.get(5)?,
+                notes: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn insert_guides(connection: &mut Connection, guides: &[GuideRecord]) -> Result<(), String> {
+    if guides.is_empty() {
+        return Ok(());
+    }
+
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    {
+        let mut statement = transaction
+            .prepare(
+                "
+                INSERT INTO guides (
+                    id, course_name, region, course_code, green_fee, best_season, notes, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+
+        for guide in guides {
+            statement
+                .execute(params![
+                    &guide.id,
+                    &guide.course_name,
+                    &guide.region,
+                    &guide.course_code,
+                    guide.green_fee,
+                    &guide.best_season,
+                    &guide.notes,
+                    &guide.updated_at
+                ])
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn update_guide_row(connection: &Connection, guide: &GuideRecord) -> Result<(), String> {
+    connection
+        .execute(
+            "
+            UPDATE guides
+            SET course_name = ?2,
+                region = ?3,
+                course_code = ?4,
+                green_fee = ?5,
+                best_season = ?6,
+                notes = ?7,
+                updated_at = ?8
+            WHERE id = ?1
+            ",
+            params![
+                &guide.id,
+                &guide.course_name,
+                &guide.region,
+                &guide.course_code,
+                guide.green_fee,
+                &guide.best_season,
+                &guide.notes,
+                &guide.updated_at
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
+}
+
+fn delete_guides_by_ids(connection: &Connection, ids: &[String]) -> Result<(), String> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+
+    let placeholders = std::iter::repeat("?")
+        .take(ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!("DELETE FROM guides WHERE id IN ({placeholders})");
+    let params = rusqlite::params_from_iter(ids.iter());
+
+    connection
+        .execute(&sql, params)
+        .map_err(|error| error.to_string())?;
+
+    Ok(())
 }
 
 fn seed_guides() -> Vec<GuideRecord> {
@@ -250,16 +413,31 @@ fn seed_guides() -> Vec<GuideRecord> {
     ]
 }
 
+fn load_legacy_guides(database_path: &Path) -> Result<Option<Vec<GuideRecord>>, String> {
+    let Some(parent) = database_path.parent() else {
+        return Ok(None);
+    };
+
+    let legacy_path = parent.join("guides.json");
+    if !legacy_path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(legacy_path).map_err(|error| error.to_string())?;
+    let guides = serde_json::from_str(&content).map_err(|error| error.to_string())?;
+    Ok(Some(guides))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{fs, path::PathBuf};
 
     use crate::models::{GuideInput, GuidesQuery};
 
     use super::GuideStore;
 
     fn temp_path() -> PathBuf {
-        std::env::temp_dir().join(format!("tonysgolfy-{}.json", uuid::Uuid::new_v4()))
+        std::env::temp_dir().join(format!("tonysgolfy-{}.db", uuid::Uuid::new_v4()))
     }
 
     #[test]
@@ -279,9 +457,12 @@ mod tests {
             })
             .expect("create should succeed");
 
+        assert!(path.exists());
         assert_eq!(store.list(&GuidesQuery::default()).len(), before + 1);
 
-        let reloaded = GuideStore::load(path).expect("reload should succeed");
+        let reloaded = GuideStore::load(path.clone()).expect("reload should succeed");
         assert!(reloaded.get(&created.id).is_some());
+
+        let _ = fs::remove_file(path);
     }
 }
