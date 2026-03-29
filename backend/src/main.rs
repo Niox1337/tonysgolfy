@@ -51,10 +51,10 @@ type AppResult<T> = Result<T, AppError>;
 async fn main() {
     dotenvy::dotenv().ok();
     let database_path = database_path();
-    let store = GuideStore::load(database_path).expect("failed to initialize guide store");
+    let store = GuideStore::load(database_path.clone()).expect("failed to initialize guide store");
     let google_ai =
         GoogleAiClient::from_env().expect("failed to initialize Google AI Studio client");
-    let auth = AuthService::from_env().expect("failed to initialize auth service");
+    let auth = AuthService::load(&database_path).expect("failed to initialize auth service");
     let state = AppState {
         store: Arc::new(RwLock::new(store)),
         google_ai,

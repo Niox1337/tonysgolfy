@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     env,
+    path::Path,
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
@@ -13,6 +14,8 @@ use axum::http::{
     HeaderMap, HeaderValue,
     header::{COOKIE, SET_COOKIE},
 };
+use chrono::Utc;
+use rusqlite::{Connection, params};
 use uuid::Uuid;
 
 const DEFAULT_SESSION_TTL_HOURS: u64 = 12;
@@ -22,8 +25,7 @@ const DEFAULT_MAX_FAILED_ATTEMPTS: u32 = 5;
 
 #[derive(Clone)]
 pub struct AuthService {
-    username: String,
-    password_hash: String,
+    accounts: Arc<RwLock<HashMap<String, UserAccount>>>,
     cookie_name: String,
     secure_cookie: bool,
     session_ttl: Duration,
@@ -35,8 +37,18 @@ pub struct AuthService {
 }
 
 #[derive(Clone)]
-struct SessionEntry {
+struct UserAccount {
+    id: String,
     username: String,
+    password_hash: String,
+    role: String,
+}
+
+#[derive(Clone)]
+struct SessionEntry {
+    user_id: String,
+    username: String,
+    role: String,
     expires_at: Instant,
 }
 
@@ -49,7 +61,9 @@ struct LoginAttemptState {
 
 #[derive(Debug, Clone)]
 pub struct SessionUser {
+    pub user_id: String,
     pub username: String,
+    pub role: String,
 }
 
 #[derive(Debug)]
@@ -60,11 +74,7 @@ pub enum AuthError {
 }
 
 impl AuthService {
-    pub fn from_env() -> Result<Self, String> {
-        let username = required_env("AUTH_USERNAME")?;
-        let password_hash = required_env("AUTH_PASSWORD_HASH")?;
-        validate_password_hash(&password_hash)?;
-
+    pub fn load(database_path: &Path) -> Result<Self, String> {
         let cookie_name =
             env::var("SESSION_COOKIE_NAME").unwrap_or_else(|_| "tonysgolfy_session".to_string());
         let secure_cookie = env::var("APP_SECURE_COOKIE")
@@ -77,9 +87,25 @@ impl AuthService {
             })
             .unwrap_or(false);
 
+        let mut connection = Connection::open(database_path).map_err(|error| error.to_string())?;
+        initialize_schema(&connection)?;
+        bootstrap_admin_if_needed(&mut connection)?;
+        let accounts = load_accounts(&connection)?;
+
+        if accounts.is_empty() {
+            return Err(
+                "no auth accounts found in database and no bootstrap admin credentials were provided"
+                    .to_string(),
+            );
+        }
+
         Ok(Self {
-            username,
-            password_hash,
+            accounts: Arc::new(RwLock::new(
+                accounts
+                    .into_iter()
+                    .map(|account| (account.username.clone(), account))
+                    .collect(),
+            )),
             cookie_name,
             secure_cookie,
             session_ttl: Duration::from_secs(
@@ -107,20 +133,33 @@ impl AuthService {
         let fingerprint = client_fingerprint(headers);
         self.enforce_rate_limit(&fingerprint)?;
 
-        let verified =
-            username.trim() == self.username && verify_password_hash(&self.password_hash, password);
+        let normalized_username = username.trim();
+        let account = self
+            .accounts
+            .read()
+            .map_err(|_| AuthError::Internal("failed to read account cache".to_string()))?
+            .get(normalized_username)
+            .cloned();
+
+        let verified = account
+            .as_ref()
+            .map(|account| verify_password_hash(&account.password_hash, password))
+            .unwrap_or(false);
 
         if !verified {
             self.register_failed_attempt(&fingerprint)?;
             return Err(AuthError::Unauthorized("用户名或密码错误。".to_string()));
         }
 
+        let account = account.expect("verified account should be present");
         self.clear_failed_attempts(&fingerprint)?;
         self.cleanup_expired_sessions()?;
 
         let session_id = Uuid::new_v4().to_string();
         let user = SessionUser {
-            username: self.username.clone(),
+            user_id: account.id.clone(),
+            username: account.username.clone(),
+            role: account.role.clone(),
         };
 
         self.sessions
@@ -129,7 +168,9 @@ impl AuthService {
             .insert(
                 session_id.clone(),
                 SessionEntry {
+                    user_id: user.user_id.clone(),
                     username: user.username.clone(),
+                    role: user.role.clone(),
                     expires_at: Instant::now() + self.session_ttl,
                 },
             );
@@ -162,7 +203,9 @@ impl AuthService {
         entry.expires_at = now + self.session_ttl;
 
         Ok(Some(SessionUser {
+            user_id: entry.user_id.clone(),
             username: entry.username.clone(),
+            role: entry.role.clone(),
         }))
     }
 
@@ -280,9 +323,94 @@ impl AuthService {
     }
 }
 
-fn required_env(name: &str) -> Result<String, String> {
-    let value =
-        env::var(name).map_err(|_| format!("missing required environment variable {name}"))?;
+fn initialize_schema(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+            ",
+        )
+        .map_err(|error| error.to_string())
+}
+
+fn bootstrap_admin_if_needed(connection: &mut Connection) -> Result<(), String> {
+    let existing_count: i64 = connection
+        .query_row("SELECT COUNT(*) FROM users", [], |row| row.get(0))
+        .map_err(|error| error.to_string())?;
+
+    if existing_count > 0 {
+        return Ok(());
+    }
+
+    let username = bootstrap_env("BOOTSTRAP_ADMIN_USERNAME")
+        .or_else(|| bootstrap_env("AUTH_USERNAME"))
+        .ok_or_else(|| "missing bootstrap admin username environment variable".to_string())?;
+    let password_hash = bootstrap_env("BOOTSTRAP_ADMIN_PASSWORD_HASH")
+        .or_else(|| bootstrap_env("AUTH_PASSWORD_HASH"))
+        .ok_or_else(|| "missing bootstrap admin password hash environment variable".to_string())?;
+
+    validate_password_hash(&password_hash)?;
+
+    let timestamp = Utc::now().to_rfc3339();
+    let user_id = Uuid::new_v4().to_string();
+    let transaction = connection
+        .transaction()
+        .map_err(|error| error.to_string())?;
+    transaction
+        .execute(
+            "
+            INSERT INTO users (id, username, password_hash, role, created_at, updated_at)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            ",
+            params![
+                user_id,
+                username,
+                password_hash,
+                "admin",
+                timestamp,
+                timestamp
+            ],
+        )
+        .map_err(|error| error.to_string())?;
+    transaction.commit().map_err(|error| error.to_string())
+}
+
+fn load_accounts(connection: &Connection) -> Result<Vec<UserAccount>, String> {
+    let mut statement = connection
+        .prepare(
+            "
+            SELECT id, username, password_hash, role
+            FROM users
+            ",
+        )
+        .map_err(|error| error.to_string())?;
+
+    let rows = statement
+        .query_map([], |row| {
+            Ok(UserAccount {
+                id: row.get(0)?,
+                username: row.get(1)?,
+                password_hash: row.get(2)?,
+                role: row.get(3)?,
+            })
+        })
+        .map_err(|error| error.to_string())?;
+
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn bootstrap_env(name: &str) -> Option<String> {
+    let value = env::var(name).ok()?;
     let trimmed = value.trim();
 
     if trimmed.is_empty()
@@ -291,12 +419,10 @@ fn required_env(name: &str) -> Result<String, String> {
             "..." | "your_username" | "your_password" | "your_password_hash"
         )
     {
-        return Err(format!(
-            "environment variable {name} is empty or still set to a placeholder"
-        ));
+        return None;
     }
 
-    Ok(trimmed.to_string())
+    Some(trimmed.to_string())
 }
 
 fn read_u64_env(name: &str) -> Option<u64> {
