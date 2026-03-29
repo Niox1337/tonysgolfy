@@ -151,6 +151,7 @@ pub struct LoginRequest {
 pub struct SessionUserInfo {
     pub id: String,
     pub name: String,
+    pub email: Option<String>,
     pub role: UserRole,
 }
 
@@ -198,4 +199,73 @@ pub struct UpdateUserRequest {
 pub struct ChangePasswordRequest {
     pub current_password: String,
     pub new_password: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MailFolder {
+    Inbox,
+    Sent,
+    Drafts,
+    Trash,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailQuery {
+    pub folder: Option<MailFolder>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailMessage {
+    pub id: String,
+    pub folder: MailFolder,
+    pub from_address: String,
+    pub to_address: String,
+    pub subject: String,
+    pub body: String,
+    pub is_read: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub sent_at: Option<String>,
+    pub reply_to_message_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MailboxResponse {
+    pub address: String,
+    pub folder: MailFolder,
+    pub messages: Vec<MailMessage>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendMailRequest {
+    pub to: String,
+    pub subject: String,
+    pub body: String,
+    pub reply_to_message_id: Option<String>,
+    pub draft_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveDraftRequest {
+    pub draft_id: Option<String>,
+    pub to: String,
+    pub subject: String,
+    pub body: String,
+    pub reply_to_message_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteMailRequest {
+    pub ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DeleteMailResponse {
+    pub updated: usize,
 }

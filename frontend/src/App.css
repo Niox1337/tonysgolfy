@@ -200,6 +200,42 @@
   height: clamp(420px, 62vh, 760px);
 }
 
+.mail-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr) minmax(300px, 360px);
+  gap: 24px;
+  align-items: start;
+}
+
+.mail-sidebar,
+.mail-list-panel,
+.mail-detail-card {
+  min-width: 0;
+}
+
+.mail-folder-list {
+  display: grid;
+  gap: 10px;
+}
+
+.mail-folder-list button {
+  justify-content: center;
+}
+
+.mail-table-wrap {
+  height: clamp(420px, 58vh, 720px);
+}
+
+.mail-detail-card {
+  margin-top: 0;
+}
+
+.mail-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.65;
+}
+
 .panel,
 .subpanel,
 .detail-card {
@@ -582,6 +618,10 @@ tbody tr:focus-within .row-edit,
 
 @media (max-width: 1180px) {
   .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mail-layout {
     grid-template-columns: 1fr;
   }
 

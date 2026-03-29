@@ -5,18 +5,22 @@ import {
   changePassword,
   createGuide,
   createUser,
+  deleteMail,
   deactivateUser,
   deleteGuides,
   downloadGuidesCsv,
   generateGuide,
   getSession,
   importGuides,
+  listMailbox,
   listDuplicateGroups,
   listGuides,
   listUsers,
   login,
   logout,
   previewDuplicates,
+  saveDraft,
+  sendMail,
   updateGuide,
   updateUser,
 } from './api'
@@ -26,6 +30,8 @@ import type {
   GuideInput,
   GuideRecord,
   ImportAudit,
+  MailFolder,
+  MailMessage,
   SearchMode,
   SessionUser,
   SortMode,
@@ -34,13 +40,15 @@ import type {
 } from './api'
 import { ChangePasswordModal } from './modules/auth/components/ChangePasswordModal'
 import { LoginPage } from './modules/auth/components/LoginPage'
-import { LOGIN_ROUTE, TABLE_ROUTE, USERS_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
+import { LOGIN_ROUTE, MAIL_ROUTE, TABLE_ROUTE, USERS_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
 import { CreateGuideModal } from './modules/guides/components/CreateGuideModal'
 import { EditGuideModal } from './modules/guides/components/EditGuideModal'
 import { GuideDetailPanel } from './modules/guides/components/GuideDetailPanel'
 import { GuideFormPanel } from './modules/guides/components/GuideFormPanel'
 import { GuideTablePanel } from './modules/guides/components/GuideTablePanel'
 import { HeroPanel } from './modules/guides/components/HeroPanel'
+import { ComposeMailModal } from './modules/mail/components/ComposeMailModal'
+import { MailPage } from './modules/mail/components/MailPage'
 import type { FormState, RegionFilter, ThemeMode } from './modules/guides/types'
 import {
   THEME_KEY,
@@ -81,6 +89,20 @@ function App() {
   const [records, setRecords] = useState<GuideRecord[]>([])
   const [allRecords, setAllRecords] = useState<GuideRecord[]>([])
   const [users, setUsers] = useState<UserRecord[]>([])
+  const [mailboxAddress, setMailboxAddress] = useState('')
+  const [mailFolder, setMailFolder] = useState<MailFolder>('inbox')
+  const [mailMessages, setMailMessages] = useState<MailMessage[]>([])
+  const [selectedMailIds, setSelectedMailIds] = useState<string[]>([])
+  const [activeMailId, setActiveMailId] = useState<string | null>(null)
+  const [isComposeOpen, setIsComposeOpen] = useState(false)
+  const [mailError, setMailError] = useState('')
+  const [composeInitial, setComposeInitial] = useState({
+    draftId: undefined as string | undefined,
+    to: '',
+    subject: '',
+    body: '',
+    replyToMessageId: undefined as string | undefined,
+  })
   const [form, setForm] = useState<FormState>(initialForm)
   const [selectedIds, setSelectedIds] = useState<string[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -109,6 +131,7 @@ function App() {
   const deferredSearchTerm = useDeferredValue(searchTerm)
   const isAuthenticated = sessionUser !== null
   const isAdmin = sessionUser?.role === 'admin'
+  const canUseMail = sessionUser?.role === 'employee' || sessionUser?.role === 'admin'
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
@@ -167,8 +190,13 @@ function App() {
 
     if (currentRoute === USERS_ROUTE && !isAdmin) {
       navigateTo(TABLE_ROUTE, true)
+      return
     }
-  }, [currentRoute, isAdmin, isAuthenticated, isCheckingSession])
+
+    if (currentRoute === MAIL_ROUTE && !canUseMail) {
+      navigateTo(TABLE_ROUTE, true)
+    }
+  }, [canUseMail, currentRoute, isAdmin, isAuthenticated, isCheckingSession])
 
   useEffect(() => {
     if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE) {
@@ -274,6 +302,35 @@ function App() {
   }, [currentRoute, isAdmin, isAuthenticated, isCheckingSession, reloadToken])
 
   useEffect(() => {
+    if (isCheckingSession || !isAuthenticated || currentRoute !== MAIL_ROUTE || !canUseMail) {
+      return
+    }
+
+    let cancelled = false
+
+    async function loadMailboxData() {
+      try {
+        const response = await listMailbox(mailFolder)
+        if (cancelled) return
+        setMailboxAddress(response.address)
+        setMailMessages(response.messages)
+        setSelectedMailIds((current) => current.filter((id) => response.messages.some((message) => message.id === id)))
+      } catch (error) {
+        if (!cancelled) {
+          setMailError(error instanceof Error ? error.message : '加载邮箱失败。')
+          handleApiError(error, '加载邮箱失败。')
+        }
+      }
+    }
+
+    loadMailboxData()
+
+    return () => {
+      cancelled = true
+    }
+  }, [canUseMail, currentRoute, isAuthenticated, isCheckingSession, mailFolder, reloadToken])
+
+  useEffect(() => {
     if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE) return
 
     if (!activeId && allRecords.length > 0) {
@@ -285,6 +342,19 @@ function App() {
       setActiveId(allRecords[0]?.id ?? null)
     }
   }, [activeId, allRecords, currentRoute, isAuthenticated, isCheckingSession])
+
+  useEffect(() => {
+    if (currentRoute !== MAIL_ROUTE) return
+
+    if (!activeMailId && mailMessages.length > 0) {
+      setActiveMailId(mailMessages[0].id)
+      return
+    }
+
+    if (activeMailId && !mailMessages.some((message) => message.id === activeMailId)) {
+      setActiveMailId(mailMessages[0]?.id ?? null)
+    }
+  }, [activeMailId, currentRoute, mailMessages])
 
   useEffect(() => {
     if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE || !isCreateModalOpen) {
@@ -366,6 +436,10 @@ function App() {
     }
 
     if (error instanceof ApiError && error.status === 403 && currentRoute === USERS_ROUTE) {
+      navigateTo(TABLE_ROUTE, true)
+    }
+
+    if (error instanceof ApiError && error.status === 403 && currentRoute === MAIL_ROUTE) {
       navigateTo(TABLE_ROUTE, true)
     }
 
@@ -679,6 +753,114 @@ function App() {
     }
   }
 
+  function handleToggleMailSelect(id: string) {
+    setSelectedMailIds((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    )
+  }
+
+  function handleComposeMail() {
+    setMailError('')
+    setComposeInitial({
+      draftId: undefined,
+      to: '',
+      subject: '',
+      body: '',
+      replyToMessageId: undefined,
+    })
+    setIsComposeOpen(true)
+  }
+
+  function handleReplyMail(message: MailMessage) {
+    setMailError('')
+    setComposeInitial({
+      draftId: undefined,
+      to: message.fromAddress,
+      subject: message.subject.startsWith('Re:') ? message.subject : `Re: ${message.subject}`,
+      body: `\n\n--- 原始邮件 ---\n${message.body}`,
+      replyToMessageId: message.id,
+    })
+    setIsComposeOpen(true)
+  }
+
+  function handleEditDraft(message: MailMessage) {
+    setMailError('')
+    setComposeInitial({
+      draftId: message.id,
+      to: message.toAddress,
+      subject: message.subject,
+      body: message.body,
+      replyToMessageId: message.replyToMessageId ?? undefined,
+    })
+    setIsComposeOpen(true)
+  }
+
+  async function handleSaveDraft(input: {
+    draftId?: string
+    to: string
+    subject: string
+    body: string
+    replyToMessageId?: string
+  }) {
+    try {
+      setMailError('')
+      const response = await saveDraft(input)
+      setMailboxAddress(response.address)
+      setMailFolder('drafts')
+      setMailMessages(response.messages)
+      setIsComposeOpen(false)
+      setComposeInitial({
+        draftId: undefined,
+        to: '',
+        subject: '',
+        body: '',
+        replyToMessageId: undefined,
+      })
+    } catch (error) {
+      setMailError(error instanceof Error ? error.message : '保存草稿失败。')
+    }
+  }
+
+  async function handleSendMail(input: {
+    draftId?: string
+    to: string
+    subject: string
+    body: string
+    replyToMessageId?: string
+  }) {
+    try {
+      setMailError('')
+      const response = await sendMail(input)
+      setMailboxAddress(response.address)
+      setMailFolder('sent')
+      setMailMessages(response.messages)
+      setSelectedMailIds([])
+      setIsComposeOpen(false)
+      setComposeInitial({
+        draftId: undefined,
+        to: '',
+        subject: '',
+        body: '',
+        replyToMessageId: undefined,
+      })
+    } catch (error) {
+      setMailError(error instanceof Error ? error.message : '发送邮件失败。')
+    }
+  }
+
+  async function handleDeleteMail() {
+    if (selectedMailIds.length === 0) return
+
+    try {
+      setMailError('')
+      await deleteMail(selectedMailIds)
+      setSelectedMailIds([])
+      await refreshData()
+    } catch (error) {
+      setMailError(error instanceof Error ? error.message : '删除邮件失败。')
+    }
+  }
+
   if (isCheckingSession) {
     return (
       <main className="auth-shell">
@@ -706,7 +888,9 @@ function App() {
     <main className="app-shell">
       <HeroPanel
         theme={theme}
-        currentRoute={currentRoute === USERS_ROUTE ? 'users' : 'table'}
+        currentRoute={
+          currentRoute === USERS_ROUTE ? 'users' : currentRoute === MAIL_ROUTE ? 'mail' : 'table'
+        }
         currentUserName={sessionUser.name}
         currentUserRole={sessionUser.role}
         allRecordsCount={allRecords.length}
@@ -714,6 +898,7 @@ function App() {
         onToggleTheme={() => setTheme((current) => (current === 'day' ? 'night' : 'day'))}
         onOpenTable={() => navigateTo(TABLE_ROUTE)}
         onOpenUsers={() => navigateTo(USERS_ROUTE)}
+        onOpenMail={() => navigateTo(MAIL_ROUTE)}
         onOpenChangePassword={() => {
           setPasswordChangeError('')
           setIsChangePasswordOpen(true)
@@ -734,6 +919,27 @@ function App() {
           onSaveEdit={handleSaveEditingUser}
           onCancelEdit={handleCancelEditingUser}
           onDeactivate={handleDeactivateUser}
+        />
+      ) : currentRoute === MAIL_ROUTE && canUseMail ? (
+        <MailPage
+          mailboxAddress={mailboxAddress || sessionUser.email || '未配置工作邮箱'}
+          folder={mailFolder}
+          messages={mailMessages}
+          selectedIds={selectedMailIds}
+          activeId={activeMailId}
+          errorMessage={mailError}
+          onFolderChange={(folder) => {
+            setMailError('')
+            setSelectedMailIds([])
+            setActiveMailId(null)
+            setMailFolder(folder)
+          }}
+          onCompose={handleComposeMail}
+          onReply={handleReplyMail}
+          onEditDraft={handleEditDraft}
+          onDeleteSelected={handleDeleteMail}
+          onToggleSelect={handleToggleMailSelect}
+          onActiveChange={setActiveMailId}
         />
       ) : (
         <section className="workspace-grid">
@@ -780,6 +986,18 @@ function App() {
           <GuideDetailPanel activeRecord={activeRecord} duplicateGroups={duplicateGroups} />
         </section>
       )}
+
+      <ComposeMailModal
+        isOpen={isComposeOpen}
+        initialValues={composeInitial}
+        errorMessage={mailError}
+        onClose={() => {
+          setIsComposeOpen(false)
+          setMailError('')
+        }}
+        onSaveDraft={handleSaveDraft}
+        onSend={handleSendMail}
+      />
 
       <CreateGuideModal
         isOpen={isCreateModalOpen}

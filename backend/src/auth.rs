@@ -72,6 +72,7 @@ struct LoginAttemptState {
 pub struct SessionUser {
     pub id: String,
     pub name: String,
+    pub email: Option<String>,
     pub role: UserRole,
 }
 
@@ -174,6 +175,7 @@ impl AuthService {
         let user = SessionUser {
             id: account.id.clone(),
             name: account.name.clone(),
+            email: account.email.clone(),
             role: account.role,
         };
         let session_id = Uuid::new_v4().to_string();
@@ -230,6 +232,26 @@ impl AuthService {
         if user.role != UserRole::Admin {
             return Err(AuthError::Forbidden(
                 "只有管理员可以访问这个页面。".to_string(),
+            ));
+        }
+
+        Ok(user)
+    }
+
+    pub fn require_mail_user(&self, headers: &HeaderMap) -> Result<SessionUser, AuthError> {
+        let user = self
+            .require_user(headers)
+            .map_err(AuthError::Unauthorized)?;
+
+        if !matches!(user.role, UserRole::Employee | UserRole::Admin) {
+            return Err(AuthError::Forbidden(
+                "只有员工和管理员可以访问工作邮箱。".to_string(),
+            ));
+        }
+
+        if user.email.as_deref().unwrap_or_default().trim().is_empty() {
+            return Err(AuthError::BadRequest(
+                "当前用户尚未配置工作邮箱。".to_string(),
             ));
         }
 
@@ -922,6 +944,7 @@ pub fn session_info_from_user(user: SessionUser) -> SessionUserInfo {
     SessionUserInfo {
         id: user.id,
         name: user.name,
+        email: user.email,
         role: user.role,
     }
 }

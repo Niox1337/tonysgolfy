@@ -1,5 +1,6 @@
 mod auth;
 mod google_ai;
+mod mail;
 mod models;
 mod python_semantic;
 mod search;
@@ -23,10 +24,12 @@ use axum::{
     routing::{delete, get, post, put},
 };
 use google_ai::GoogleAiClient;
+use mail::MailService;
 use models::{
     BulkDeleteRequest, BulkDeleteResponse, ChangePasswordRequest, CreateUserRequest,
-    GenerateGuideRequest, GenerateGuideResponse, GuideInput, GuideListResponse, GuidesQuery,
-    HealthResponse, ImportRequest, LoginRequest, SessionResponse, UpdateUserRequest,
+    DeleteMailRequest, DeleteMailResponse, GenerateGuideRequest, GenerateGuideResponse, GuideInput,
+    GuideListResponse, GuidesQuery, HealthResponse, ImportRequest, LoginRequest, MailQuery,
+    MailboxResponse, SaveDraftRequest, SendMailRequest, SessionResponse, UpdateUserRequest,
 };
 use python_semantic::rank_guides;
 use search::{filter_region, sort_semantic_guides};
@@ -38,6 +41,7 @@ struct AppState {
     store: Arc<RwLock<GuideStore>>,
     google_ai: GoogleAiClient,
     auth: AuthService,
+    mail: MailService,
 }
 
 #[derive(Debug)]
@@ -56,10 +60,12 @@ async fn main() {
     let google_ai =
         GoogleAiClient::from_env().expect("failed to initialize Google AI Studio client");
     let auth = AuthService::load(&database_path).expect("failed to initialize auth service");
+    let mail = MailService::load(&database_path).expect("failed to initialize mail service");
     let state = AppState {
         store: Arc::new(RwLock::new(store)),
         google_ai,
         auth,
+        mail,
     };
 
     let app = Router::new()
@@ -68,6 +74,10 @@ async fn main() {
         .route("/api/auth/logout", post(logout))
         .route("/api/auth/session", get(get_session))
         .route("/api/auth/change-password", post(change_password))
+        .route("/api/mail", get(list_mailbox))
+        .route("/api/mail/send", post(send_mail))
+        .route("/api/mail/draft", post(save_draft))
+        .route("/api/mail/delete", post(delete_mail))
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/{id}", put(update_user))
         .route("/api/users/{id}/deactivate", post(deactivate_user))
@@ -166,6 +176,49 @@ async fn change_password(
         .change_password(&user.id, &request.current_password, &request.new_password)
         .map_err(auth_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_mailbox(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<MailQuery>,
+) -> AppResult<Json<MailboxResponse>> {
+    let user = state.auth.require_mail_user(&headers).map_err(auth_error)?;
+    let response = state
+        .mail
+        .list_mailbox(&user, query.folder.unwrap_or(models::MailFolder::Inbox))
+        .map_err(internal_error_from)?;
+    Ok(Json(response))
+}
+
+async fn send_mail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SendMailRequest>,
+) -> AppResult<Json<MailboxResponse>> {
+    let user = state.auth.require_mail_user(&headers).map_err(auth_error)?;
+    let response = state.mail.send_mail(&user, request).map_err(bad_request)?;
+    Ok(Json(response))
+}
+
+async fn save_draft(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SaveDraftRequest>,
+) -> AppResult<Json<MailboxResponse>> {
+    let user = state.auth.require_mail_user(&headers).map_err(auth_error)?;
+    let response = state.mail.save_draft(&user, request).map_err(bad_request)?;
+    Ok(Json(response))
+}
+
+async fn delete_mail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<DeleteMailRequest>,
+) -> AppResult<Json<DeleteMailResponse>> {
+    let user = state.auth.require_mail_user(&headers).map_err(auth_error)?;
+    let response = state.mail.delete_messages(&user, &request.ids).map_err(internal_error_from)?;
+    Ok(Json(response))
 }
 
 async fn list_users(

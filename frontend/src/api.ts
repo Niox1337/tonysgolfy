@@ -42,10 +42,12 @@ export type DuplicateGroup = {
 }
 
 export type UserRole = 'judge' | 'employee' | 'admin'
+export type MailFolder = 'inbox' | 'sent' | 'drafts' | 'trash'
 
 export type SessionUser = {
   id: string
   name: string
+  email: string | null
   role: UserRole
 }
 
@@ -63,6 +65,26 @@ export type UserRecord = {
   active: boolean
   createdAt: string
   updatedAt: string
+}
+
+export type MailMessage = {
+  id: string
+  folder: MailFolder
+  fromAddress: string
+  toAddress: string
+  subject: string
+  body: string
+  isRead: boolean
+  createdAt: string
+  updatedAt: string
+  sentAt: string | null
+  replyToMessageId: string | null
+}
+
+export type MailboxResponse = {
+  address: string
+  folder: MailFolder
+  messages: MailMessage[]
 }
 
 type GuideListResponse = {
@@ -208,6 +230,43 @@ export async function updateUser(id: string, input: {
 export async function deactivateUser(id: string) {
   return requestJson<UserRecord>(`/api/users/${id}/deactivate`, {
     method: 'POST',
+  })
+}
+
+export async function listMailbox(folder: MailFolder) {
+  return requestJson<MailboxResponse>(`/api/mail?folder=${folder}`)
+}
+
+export async function sendMail(input: {
+  to: string
+  subject: string
+  body: string
+  replyToMessageId?: string
+  draftId?: string
+}) {
+  return requestJson<MailboxResponse>('/api/mail/send', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function saveDraft(input: {
+  draftId?: string
+  to: string
+  subject: string
+  body: string
+  replyToMessageId?: string
+}) {
+  return requestJson<MailboxResponse>('/api/mail/draft', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  })
+}
+
+export async function deleteMail(ids: string[]) {
+  return requestJson<{ updated: number }>('/api/mail/delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
   })
 }
 

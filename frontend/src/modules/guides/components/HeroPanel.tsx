@@ -3,7 +3,7 @@ import type { UserRole } from '../../../api'
 
 type HeroPanelProps = {
   theme: ThemeMode
-  currentRoute: 'table' | 'users'
+  currentRoute: 'table' | 'users' | 'mail'
   currentUserName: string
   currentUserRole: UserRole
   allRecordsCount: number
@@ -11,6 +11,7 @@ type HeroPanelProps = {
   onToggleTheme: () => void
   onOpenTable: () => void
   onOpenUsers: () => void
+  onOpenMail: () => void
   onOpenChangePassword: () => void
   onLogout: () => Promise<void>
 }
@@ -25,6 +26,7 @@ export function HeroPanel({
   onToggleTheme,
   onOpenTable,
   onOpenUsers,
+  onOpenMail,
   onOpenChangePassword,
   onLogout,
 }: HeroPanelProps) {
@@ -41,6 +43,11 @@ export function HeroPanel({
         <button className={currentRoute === 'table' ? 'primary' : 'ghost'} type="button" onClick={onOpenTable}>
           球场攻略
         </button>
+        {currentUserRole !== 'judge' ? (
+          <button className={currentRoute === 'mail' ? 'primary' : 'ghost'} type="button" onClick={onOpenMail}>
+            邮箱
+          </button>
+        ) : null}
         {currentUserRole === 'admin' ? (
           <button className={currentRoute === 'users' ? 'primary' : 'ghost'} type="button" onClick={onOpenUsers}>
             用户管理
