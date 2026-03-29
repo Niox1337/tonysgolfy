@@ -4,6 +4,75 @@
   padding: 32px;
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+}
+
+.login-panel {
+  width: min(1080px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(320px, 420px);
+  gap: 24px;
+  align-items: stretch;
+}
+
+.login-copy,
+.login-card {
+  border: 1px solid var(--line);
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top left, var(--glow) 0, transparent 34%),
+    linear-gradient(135deg, var(--panel) 0%, var(--panel-strong) 100%);
+  backdrop-filter: blur(24px);
+  box-shadow: var(--shadow);
+}
+
+.login-copy {
+  display: grid;
+  align-content: center;
+  gap: 14px;
+  padding: 36px;
+}
+
+.login-tagline {
+  max-width: 30ch;
+  color: var(--muted);
+  font-size: 1rem;
+}
+
+.login-card {
+  padding: 24px;
+}
+
+.login-card-header {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.auth-theme-toggle {
+  grid-column: auto;
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.login-submit {
+  width: 100%;
+  justify-content: center;
+}
+
 .hero-panel,
 .panel,
 .subpanel,
@@ -477,6 +546,10 @@ tbody tr:focus-within .row-edit,
 
 @media (max-width: 1180px) {
   .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .login-panel {
     grid-template-columns: 1fr;
   }
 

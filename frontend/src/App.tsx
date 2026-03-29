@@ -20,6 +20,9 @@ import type {
   SearchMode,
   SortMode,
 } from './api'
+import { LoginPage } from './modules/auth/components/LoginPage'
+import { readAuthState, writeAuthState } from './modules/auth/session'
+import { LOGIN_ROUTE, TABLE_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
 import { CreateGuideModal } from './modules/guides/components/CreateGuideModal'
 import { EditGuideModal } from './modules/guides/components/EditGuideModal'
 import { GuideDetailPanel } from './modules/guides/components/GuideDetailPanel'
@@ -41,6 +44,9 @@ import './App.css'
 
 function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme())
+  const [currentRoute, setCurrentRoute] = useState(() => normalizeRoute(window.location.pathname))
+  const [isAuthenticated, setIsAuthenticated] = useState(() => readAuthState())
+  const [loginError, setLoginError] = useState('')
   const [records, setRecords] = useState<GuideRecord[]>([])
   const [allRecords, setAllRecords] = useState<GuideRecord[]>([])
   const [form, setForm] = useState<FormState>(initialForm)
@@ -72,6 +78,34 @@ function App() {
   }, [theme])
 
   useEffect(() => {
+    function syncRoute() {
+      setCurrentRoute(normalizeRoute(window.location.pathname))
+    }
+
+    window.addEventListener('popstate', syncRoute)
+    return () => window.removeEventListener('popstate', syncRoute)
+  }, [])
+
+  useEffect(() => {
+    const targetRoute = isAuthenticated ? TABLE_ROUTE : LOGIN_ROUTE
+    const routeExists = window.location.pathname === LOGIN_ROUTE || window.location.pathname === TABLE_ROUTE
+    const shouldRedirect =
+      !routeExists ||
+      currentRoute !== targetRoute ||
+      (!isAuthenticated && currentRoute === TABLE_ROUTE) ||
+      (isAuthenticated && currentRoute === LOGIN_ROUTE)
+
+    if (shouldRedirect) {
+      navigateTo(targetRoute, true)
+    }
+  }, [currentRoute, isAuthenticated])
+
+  useEffect(() => {
+    if (!isAuthenticated || currentRoute !== TABLE_ROUTE) {
+      setIsLoading(false)
+      return
+    }
+
     let cancelled = false
 
     async function loadReferenceData() {
@@ -100,9 +134,14 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [reloadToken])
+  }, [currentRoute, isAuthenticated, reloadToken])
 
   useEffect(() => {
+    if (!isAuthenticated || currentRoute !== TABLE_ROUTE) {
+      setIsLoading(false)
+      return
+    }
+
     let cancelled = false
 
     async function loadVisibleGuides() {
@@ -135,9 +174,11 @@ function App() {
     return () => {
       cancelled = true
     }
-  }, [deferredSearchTerm, regionFilter, reloadToken, searchMode, sortMode])
+  }, [currentRoute, deferredSearchTerm, isAuthenticated, regionFilter, reloadToken, searchMode, sortMode])
 
   useEffect(() => {
+    if (!isAuthenticated || currentRoute !== TABLE_ROUTE) return
+
     if (!activeId && allRecords.length > 0) {
       setActiveId(allRecords[0].id)
       return
@@ -146,9 +187,14 @@ function App() {
     if (activeId && !allRecords.some((record) => record.id === activeId)) {
       setActiveId(allRecords[0]?.id ?? null)
     }
-  }, [activeId, allRecords])
+  }, [activeId, allRecords, currentRoute, isAuthenticated])
 
   useEffect(() => {
+    if (!isAuthenticated || currentRoute !== TABLE_ROUTE || !isCreateModalOpen) {
+      setDuplicatePreview([])
+      return
+    }
+
     if (!form.courseName.trim() || !form.courseCode.trim()) {
       setDuplicatePreview([])
       return
@@ -172,7 +218,7 @@ function App() {
       cancelled = true
       window.clearTimeout(timeoutId)
     }
-  }, [form])
+  }, [currentRoute, form, isAuthenticated, isCreateModalOpen])
 
   const activeRecord = useMemo(
     () => allRecords.find((record) => record.id === activeId) ?? null,
@@ -391,6 +437,30 @@ function App() {
     } finally {
       setIsGeneratingGuide(false)
     }
+  }
+
+  function handleLogin(username: string, password: string) {
+    if (!username.trim() || !password.trim()) {
+      return '请输入用户名和密码。'
+    }
+
+    setLoginError('')
+    setErrorMessage('')
+    setIsAuthenticated(true)
+    writeAuthState(true)
+    navigateTo(TABLE_ROUTE)
+    return null
+  }
+
+  if (!isAuthenticated || currentRoute === LOGIN_ROUTE) {
+    return (
+      <LoginPage
+        theme={theme}
+        errorMessage={loginError}
+        onToggleTheme={() => setTheme((current) => (current === 'day' ? 'night' : 'day'))}
+        onLogin={handleLogin}
+      />
+    )
   }
 
   return (
