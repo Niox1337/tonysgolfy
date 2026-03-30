@@ -21,6 +21,7 @@ import {
   previewDuplicates,
   saveDraft,
   sendMail,
+  submitScores,
   updateGuide,
   updateUser,
 } from './api'
@@ -40,7 +41,7 @@ import type {
 } from './api'
 import { ChangePasswordModal } from './modules/auth/components/ChangePasswordModal'
 import { LoginPage } from './modules/auth/components/LoginPage'
-import { LOGIN_ROUTE, MAIL_ROUTE, TABLE_ROUTE, USERS_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
+import { LOGIN_ROUTE, MAIL_ROUTE, SCORES_ROUTE, TABLE_ROUTE, USERS_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
 import { CreateGuideModal } from './modules/guides/components/CreateGuideModal'
 import { EditGuideModal } from './modules/guides/components/EditGuideModal'
 import { GuideDetailPanel } from './modules/guides/components/GuideDetailPanel'
@@ -49,6 +50,8 @@ import { GuideTablePanel } from './modules/guides/components/GuideTablePanel'
 import { HeroPanel } from './modules/guides/components/HeroPanel'
 import { ComposeMailModal } from './modules/mail/components/ComposeMailModal'
 import { MailPage } from './modules/mail/components/MailPage'
+import { ScorePage } from './modules/scores/components/ScorePage'
+import type { ScoreRow } from './modules/scores/components/ScorePage'
 import type { FormState, RegionFilter, ThemeMode } from './modules/guides/types'
 import {
   THEME_KEY,
@@ -79,9 +82,19 @@ const initialEditUserForm = {
   role: 'employee' as UserRole,
 }
 
+function createScoreRow(): ScoreRow {
+  return {
+    id: globalThis.crypto?.randomUUID?.() ?? `score-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    guideId: '',
+    courseName: '',
+    score: '',
+  }
+}
+
 function App() {
   const [theme, setTheme] = useState<ThemeMode>(() => loadTheme())
   const [currentRoute, setCurrentRoute] = useState(() => normalizeRoute(window.location.pathname))
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false)
   const [sessionUser, setSessionUser] = useState<SessionUser | null>(null)
   const [isCheckingSession, setIsCheckingSession] = useState(true)
   const [isLoggingIn, setIsLoggingIn] = useState(false)
@@ -112,6 +125,11 @@ function App() {
   const [editingForm, setEditingForm] = useState<FormState>(initialForm)
   const [createUserForm, setCreateUserForm] = useState(initialCreateUserForm)
   const [editUserForm, setEditUserForm] = useState(initialEditUserForm)
+  const [scoreJudgeName, setScoreJudgeName] = useState('')
+  const [scoreRows, setScoreRows] = useState<ScoreRow[]>(() => [createScoreRow()])
+  const [scoreError, setScoreError] = useState('')
+  const [scoreSuccess, setScoreSuccess] = useState('')
+  const [isSubmittingScores, setIsSubmittingScores] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [regionFilter, setRegionFilter] = useState<RegionFilter>('all')
@@ -148,6 +166,27 @@ function App() {
   }, [])
 
   useEffect(() => {
+    if (!isAuthenticated) {
+      setIsSidebarOpen(false)
+    }
+  }, [isAuthenticated])
+
+  useEffect(() => {
+    setIsSidebarOpen(false)
+  }, [currentRoute])
+
+  useEffect(() => {
+    if (!isSidebarOpen) return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+    }
+  }, [isSidebarOpen])
+
+  useEffect(() => {
     let cancelled = false
 
     async function loadSession() {
@@ -172,6 +211,15 @@ function App() {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (!sessionUser) {
+      setScoreJudgeName('')
+      return
+    }
+
+    setScoreJudgeName(sessionUser.role === 'judge' ? sessionUser.name : '')
+  }, [sessionUser])
 
   useEffect(() => {
     if (isCheckingSession) return
@@ -199,7 +247,11 @@ function App() {
   }, [canUseMail, currentRoute, isAdmin, isAuthenticated, isCheckingSession])
 
   useEffect(() => {
-    if (isCheckingSession || !isAuthenticated || currentRoute !== TABLE_ROUTE) {
+    if (
+      isCheckingSession ||
+      !isAuthenticated ||
+      (currentRoute !== TABLE_ROUTE && currentRoute !== SCORES_ROUTE)
+    ) {
       setIsLoading(false)
       return
     }
@@ -208,18 +260,20 @@ function App() {
 
     async function loadReferenceData() {
       try {
-        const [guidesResponse, groupsResponse] = await Promise.all([
-          listGuides(),
-          listDuplicateGroups(),
-        ])
+        const guidesResponse = await listGuides()
 
         if (cancelled) return
 
         setAllRecords(guidesResponse.guides)
-        setDuplicateGroups(groupsResponse)
         setSelectedIds((current) =>
           current.filter((id) => guidesResponse.guides.some((record) => record.id === id)),
         )
+
+        if (currentRoute === TABLE_ROUTE) {
+          const groupsResponse = await listDuplicateGroups()
+          if (cancelled) return
+          setDuplicateGroups(groupsResponse)
+        }
       } catch (error) {
         if (!cancelled) {
           handleApiError(error, '加载球场数据失败。')
@@ -671,7 +725,11 @@ function App() {
       setErrorMessage('')
       setPasswordChangeError('')
       setSelectedIds([])
+      setSelectedMailIds([])
       setUsers([])
+      setScoreError('')
+      setScoreSuccess('')
+      setScoreRows([createScoreRow()])
       setIsCreateModalOpen(false)
       setEditingId(null)
       setIsChangePasswordOpen(false)
@@ -861,6 +919,92 @@ function App() {
     }
   }
 
+  function handleAddScoreRow() {
+    setScoreError('')
+    setScoreSuccess('')
+    setScoreRows((current) => [...current, createScoreRow()])
+  }
+
+  function handleRemoveScoreRow(id: string) {
+    setScoreError('')
+    setScoreSuccess('')
+    setScoreRows((current) => (current.length === 1 ? current : current.filter((row) => row.id !== id)))
+  }
+
+  function handleChooseScoreGuide(rowId: string, guide: GuideRecord) {
+    setScoreError('')
+    setScoreSuccess('')
+    setScoreRows((current) =>
+      current.map((row) =>
+        row.id === rowId
+          ? {
+              ...row,
+              guideId: guide.id,
+              courseName: guide.courseName,
+            }
+          : row,
+      ),
+    )
+  }
+
+  function handleScoreValueChange(rowId: string, value: string) {
+    setScoreError('')
+    setScoreSuccess('')
+    setScoreRows((current) => current.map((row) => (row.id === rowId ? { ...row, score: value } : row)))
+  }
+
+  async function handleSubmitScores() {
+    const judgeName = sessionUser?.role === 'judge' ? sessionUser.name : scoreJudgeName.trim()
+    if (!judgeName) {
+      setScoreError('评委姓名不能为空。')
+      return
+    }
+
+    const emptyGuideRow = scoreRows.find((row) => !row.guideId)
+    if (emptyGuideRow) {
+      setScoreError('每一行都需要选择球场。')
+      return
+    }
+
+    const invalidScoreRow = scoreRows.find((row) => {
+      const score = Number(row.score)
+      return !row.score.trim() || Number.isNaN(score) || score < 0 || score > 100
+    })
+    if (invalidScoreRow) {
+      setScoreError('每一行都需要填写 0 到 100 之间的分数。')
+      return
+    }
+
+    if (new Set(scoreRows.map((row) => row.guideId)).size !== scoreRows.length) {
+      setScoreError('同一批提交里不能重复选择同一个球场。')
+      return
+    }
+
+    try {
+      setIsSubmittingScores(true)
+      setScoreError('')
+      setScoreSuccess('')
+      const response = await submitScores({
+        judgeName,
+        scores: scoreRows.map((row) => ({
+          guideId: row.guideId,
+          score: Number(row.score),
+        })),
+      })
+      setScoreSuccess(`已提交 ${response.submitted} 条球场评分。`)
+      setScoreRows([createScoreRow()])
+      if (sessionUser?.role === 'judge') {
+        setScoreJudgeName(sessionUser.name)
+      } else {
+        setScoreJudgeName('')
+      }
+    } catch (error) {
+      setScoreError(error instanceof Error ? error.message : '提交球场评分失败。')
+    } finally {
+      setIsSubmittingScores(false)
+    }
+  }
+
   if (isCheckingSession) {
     return (
       <main className="auth-shell">
@@ -886,106 +1030,157 @@ function App() {
 
   return (
     <main className="app-shell">
+      <button
+        className="sidebar-toggle"
+        type="button"
+        onClick={() => setIsSidebarOpen((current) => !current)}
+        aria-expanded={isSidebarOpen}
+        aria-label={isSidebarOpen ? '收起侧边栏' : '展开侧边栏'}
+      >
+        <span aria-hidden="true">{isSidebarOpen ? '✕' : '☰'}</span>
+      </button>
+
+      {isSidebarOpen ? <button className="sidebar-backdrop" type="button" onClick={() => setIsSidebarOpen(false)} aria-label="关闭侧边栏" /> : null}
+
       <HeroPanel
+        isOpen={isSidebarOpen}
         theme={theme}
         currentRoute={
-          currentRoute === USERS_ROUTE ? 'users' : currentRoute === MAIL_ROUTE ? 'mail' : 'table'
+          currentRoute === USERS_ROUTE
+            ? 'users'
+            : currentRoute === MAIL_ROUTE
+              ? 'mail'
+              : currentRoute === SCORES_ROUTE
+                ? 'scores'
+                : 'table'
         }
         currentUserName={sessionUser.name}
         currentUserRole={sessionUser.role}
         allRecordsCount={allRecords.length}
         featuredCount={featuredCount}
         onToggleTheme={() => setTheme((current) => (current === 'day' ? 'night' : 'day'))}
-        onOpenTable={() => navigateTo(TABLE_ROUTE)}
-        onOpenUsers={() => navigateTo(USERS_ROUTE)}
-        onOpenMail={() => navigateTo(MAIL_ROUTE)}
+        onOpenTable={() => {
+          setIsSidebarOpen(false)
+          navigateTo(TABLE_ROUTE)
+        }}
+        onOpenScores={() => {
+          setIsSidebarOpen(false)
+          navigateTo(SCORES_ROUTE)
+        }}
+        onOpenUsers={() => {
+          setIsSidebarOpen(false)
+          navigateTo(USERS_ROUTE)
+        }}
+        onOpenMail={() => {
+          setIsSidebarOpen(false)
+          navigateTo(MAIL_ROUTE)
+        }}
         onOpenChangePassword={() => {
           setPasswordChangeError('')
           setIsChangePasswordOpen(true)
+          setIsSidebarOpen(false)
         }}
         onLogout={handleLogout}
       />
 
-      {currentRoute === USERS_ROUTE && isAdmin ? (
-        <UserManagementPage
-          users={users}
-          createForm={createUserForm}
-          editForm={editUserForm}
-          errorMessage={errorMessage}
-          onCreateFormChange={updateCreateUserForm}
-          onEditFormChange={updateEditUserForm}
-          onCreateUser={handleCreateUser}
-          onStartEditing={handleStartEditingUser}
-          onSaveEdit={handleSaveEditingUser}
-          onCancelEdit={handleCancelEditingUser}
-          onDeactivate={handleDeactivateUser}
-        />
-      ) : currentRoute === MAIL_ROUTE && canUseMail ? (
-        <MailPage
-          mailboxAddress={mailboxAddress || sessionUser.email || '未配置工作邮箱'}
-          folder={mailFolder}
-          messages={mailMessages}
-          selectedIds={selectedMailIds}
-          activeId={activeMailId}
-          errorMessage={mailError}
-          onFolderChange={(folder) => {
-            setMailError('')
-            setSelectedMailIds([])
-            setActiveMailId(null)
-            setMailFolder(folder)
-          }}
-          onCompose={handleComposeMail}
-          onReply={handleReplyMail}
-          onEditDraft={handleEditDraft}
-          onDeleteSelected={handleDeleteMail}
-          onToggleSelect={handleToggleMailSelect}
-          onActiveChange={setActiveMailId}
-        />
-      ) : (
-        <section className="workspace-grid">
-          <GuideFormPanel
-            guidePrompt={guidePrompt}
-            generatedGuide={generatedGuide}
-            importMessage={importMessage}
+      <section className={`app-main${isSidebarOpen ? ' app-main-dimmed' : ''}`}>
+        {currentRoute === USERS_ROUTE && isAdmin ? (
+          <UserManagementPage
+            users={users}
+            createForm={createUserForm}
+            editForm={editUserForm}
             errorMessage={errorMessage}
-            isGeneratingGuide={isGeneratingGuide}
-            importAudits={importAudits}
-            onGuidePromptChange={setGuidePrompt}
-            onOpenCreateModal={() => {
-              setErrorMessage('')
-              setIsCreateModalOpen(true)
+            onCreateFormChange={updateCreateUserForm}
+            onEditFormChange={updateEditUserForm}
+            onCreateUser={handleCreateUser}
+            onStartEditing={handleStartEditingUser}
+            onSaveEdit={handleSaveEditingUser}
+            onCancelEdit={handleCancelEditingUser}
+            onDeactivate={handleDeactivateUser}
+          />
+        ) : currentRoute === MAIL_ROUTE && canUseMail ? (
+          <MailPage
+            mailboxAddress={mailboxAddress || sessionUser.email || '未配置工作邮箱'}
+            folder={mailFolder}
+            messages={mailMessages}
+            selectedIds={selectedMailIds}
+            activeId={activeMailId}
+            errorMessage={mailError}
+            onFolderChange={(folder) => {
+              setMailError('')
+              setSelectedMailIds([])
+              setActiveMailId(null)
+              setMailFolder(folder)
             }}
-            onImport={handleImport}
-            onExportCsv={handleExport}
-            onExportExcel={handleExportExcel}
-            onGenerateGuide={handleGenerateGuide}
+            onCompose={handleComposeMail}
+            onReply={handleReplyMail}
+            onEditDraft={handleEditDraft}
+            onDeleteSelected={handleDeleteMail}
+            onToggleSelect={handleToggleMailSelect}
+            onActiveChange={setActiveMailId}
           />
-
-          <GuideTablePanel
-            searchTerm={searchTerm}
-            searchMode={searchMode}
-            regionFilter={regionFilter}
-            sortMode={sortMode}
-            regionOptions={regionOptions}
-            records={records}
-            selectedIds={selectedIds}
-            activeId={activeId}
-            isLoading={isLoading}
-            allVisibleSelected={allVisibleSelected}
-            onSearchTermChange={setSearchTerm}
-            onSearchModeChange={setSearchMode}
-            onRegionFilterChange={setRegionFilter}
-            onSortModeChange={setSortMode}
-            onSelectAll={handleSelectAll}
-            onDeleteSelected={handleDeleteSelected}
-            onToggleSelect={handleToggleSelect}
-            onActiveChange={setActiveId}
-            onStartEditing={startEditing}
+        ) : currentRoute === SCORES_ROUTE ? (
+          <ScorePage
+            judgeName={sessionUser.role === 'judge' ? sessionUser.name : scoreJudgeName}
+            canEditJudgeName={sessionUser.role !== 'judge'}
+            guides={allRecords}
+            rows={scoreRows}
+            errorMessage={scoreError}
+            successMessage={scoreSuccess}
+            isSubmitting={isSubmittingScores}
+            onJudgeNameChange={setScoreJudgeName}
+            onAddRow={handleAddScoreRow}
+            onRemoveRow={handleRemoveScoreRow}
+            onChooseGuide={handleChooseScoreGuide}
+            onScoreChange={handleScoreValueChange}
+            onSubmit={handleSubmitScores}
           />
+        ) : (
+          <section className="workspace-grid">
+            <GuideFormPanel
+              guidePrompt={guidePrompt}
+              generatedGuide={generatedGuide}
+              importMessage={importMessage}
+              errorMessage={errorMessage}
+              isGeneratingGuide={isGeneratingGuide}
+              importAudits={importAudits}
+              onGuidePromptChange={setGuidePrompt}
+              onOpenCreateModal={() => {
+                setErrorMessage('')
+                setIsCreateModalOpen(true)
+              }}
+              onImport={handleImport}
+              onExportCsv={handleExport}
+              onExportExcel={handleExportExcel}
+              onGenerateGuide={handleGenerateGuide}
+            />
 
-          <GuideDetailPanel activeRecord={activeRecord} duplicateGroups={duplicateGroups} />
-        </section>
-      )}
+            <GuideTablePanel
+              searchTerm={searchTerm}
+              searchMode={searchMode}
+              regionFilter={regionFilter}
+              sortMode={sortMode}
+              regionOptions={regionOptions}
+              records={records}
+              selectedIds={selectedIds}
+              activeId={activeId}
+              isLoading={isLoading}
+              allVisibleSelected={allVisibleSelected}
+              onSearchTermChange={setSearchTerm}
+              onSearchModeChange={setSearchMode}
+              onRegionFilterChange={setRegionFilter}
+              onSortModeChange={setSortMode}
+              onSelectAll={handleSelectAll}
+              onDeleteSelected={handleDeleteSelected}
+              onToggleSelect={handleToggleSelect}
+              onActiveChange={setActiveId}
+              onStartEditing={startEditing}
+            />
+
+            <GuideDetailPanel activeRecord={activeRecord} duplicateGroups={duplicateGroups} />
+          </section>
+        )}
+      </section>
 
       <ComposeMailModal
         isOpen={isComposeOpen}

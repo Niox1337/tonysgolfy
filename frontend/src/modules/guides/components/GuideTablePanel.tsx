@@ -77,8 +77,14 @@ export function GuideTablePanel({
             ))}
           </select>
         </label>
-        <label className="tool-field">
-          Sort
+      </div>
+
+      <div className="toolbar">
+        <button className="ghost" type="button" onClick={onSelectAll}>
+          {allVisibleSelected ? '取消全选' : '全选'}
+        </button>
+        <label className="tool-field toolbar-field toolbar-inline-field">
+          <span>排序</span>
           <select value={sortMode} onChange={(event) => onSortModeChange(event.target.value as SortMode)}>
             <option value="updated-desc">最近更新</option>
             <option value="updated-asc">最早更新</option>
@@ -87,12 +93,6 @@ export function GuideTablePanel({
             <option value="name-asc">球场名称 A-Z</option>
           </select>
         </label>
-      </div>
-
-      <div className="toolbar">
-        <button className="ghost" type="button" onClick={onSelectAll}>
-          {allVisibleSelected ? '取消全选' : '全选'}
-        </button>
         <button className="danger" type="button" onClick={onDeleteSelected} disabled={selectedIds.length === 0}>
           删除选中项 {selectedIds.length > 0 ? `(${selectedIds.length})` : ''}
         </button>

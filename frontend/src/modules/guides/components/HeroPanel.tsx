@@ -2,14 +2,16 @@ import type { ThemeMode } from '../types'
 import type { UserRole } from '../../../api'
 
 type HeroPanelProps = {
+  isOpen: boolean
   theme: ThemeMode
-  currentRoute: 'table' | 'users' | 'mail'
+  currentRoute: 'table' | 'users' | 'mail' | 'scores'
   currentUserName: string
   currentUserRole: UserRole
   allRecordsCount: number
   featuredCount: number
   onToggleTheme: () => void
   onOpenTable: () => void
+  onOpenScores: () => void
   onOpenUsers: () => void
   onOpenMail: () => void
   onOpenChangePassword: () => void
@@ -17,6 +19,7 @@ type HeroPanelProps = {
 }
 
 export function HeroPanel({
+  isOpen,
   theme,
   currentRoute,
   currentUserName,
@@ -25,23 +28,28 @@ export function HeroPanel({
   featuredCount,
   onToggleTheme,
   onOpenTable,
+  onOpenScores,
   onOpenUsers,
   onOpenMail,
   onOpenChangePassword,
   onLogout,
 }: HeroPanelProps) {
   return (
-    <section className="hero-panel">
-      <div>
+    <aside className={`hero-panel${isOpen ? ' is-open' : ''}`}>
+      <div className="hero-brand">
         <p className="eyebrow">tonysgolfy</p>
         <h1>tonysgolfy</h1>
         <p className="helper-text hero-meta">
           {currentUserName} · {currentUserRole === 'admin' ? '管理员' : currentUserRole === 'judge' ? '评委' : '员工'}
         </p>
       </div>
-      <div className="hero-actions">
+
+      <div className="hero-actions hero-nav">
         <button className={currentRoute === 'table' ? 'primary' : 'ghost'} type="button" onClick={onOpenTable}>
           球场攻略
+        </button>
+        <button className={currentRoute === 'scores' ? 'primary' : 'ghost'} type="button" onClick={onOpenScores}>
+          球场评分
         </button>
         {currentUserRole !== 'judge' ? (
           <button className={currentRoute === 'mail' ? 'primary' : 'ghost'} type="button" onClick={onOpenMail}>
@@ -53,6 +61,9 @@ export function HeroPanel({
             用户管理
           </button>
         ) : null}
+      </div>
+
+      <div className="hero-actions">
         <button className="theme-toggle" type="button" onClick={onToggleTheme}>
           <span aria-hidden="true" className="theme-icon">
             {theme === 'day' ? '🌙' : '☀'}
@@ -65,6 +76,9 @@ export function HeroPanel({
         <button className="ghost logout-button" type="button" onClick={onLogout}>
           退出登录
         </button>
+      </div>
+
+      <div className="hero-stats">
         <div className="stat-card">
           <span>攻略条目</span>
           <strong>{allRecordsCount}</strong>
@@ -74,6 +88,6 @@ export function HeroPanel({
           <strong>{featuredCount}</strong>
         </div>
       </div>
-    </section>
+    </aside>
   )
 }
