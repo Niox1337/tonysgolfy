@@ -87,6 +87,11 @@ export type MailboxResponse = {
   messages: MailMessage[]
 }
 
+export type ScoreSubmission = {
+  guideId: string
+  score: number
+}
+
 type GuideListResponse = {
   guides: GuideRecord[]
   total: number
@@ -267,6 +272,13 @@ export async function deleteMail(ids: string[]) {
   return requestJson<{ updated: number }>('/api/mail/delete', {
     method: 'POST',
     body: JSON.stringify({ ids }),
+  })
+}
+
+export async function submitScores(input: { judgeName: string; scores: ScoreSubmission[] }) {
+  return requestJson<{ submitted: number }>('/api/scores', {
+    method: 'POST',
+    body: JSON.stringify(input),
   })
 }
 

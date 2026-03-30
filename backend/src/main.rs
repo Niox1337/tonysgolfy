@@ -3,6 +3,7 @@ mod google_ai;
 mod mail;
 mod models;
 mod python_semantic;
+mod score;
 mod search;
 mod store;
 
@@ -29,9 +30,11 @@ use models::{
     BulkDeleteRequest, BulkDeleteResponse, ChangePasswordRequest, CreateUserRequest,
     DeleteMailRequest, DeleteMailResponse, GenerateGuideRequest, GenerateGuideResponse, GuideInput,
     GuideListResponse, GuidesQuery, HealthResponse, ImportRequest, LoginRequest, MailQuery,
-    MailboxResponse, SaveDraftRequest, SendMailRequest, SessionResponse, UpdateUserRequest,
+    MailboxResponse, SaveDraftRequest, SendMailRequest, SessionResponse, SubmitScoresRequest,
+    SubmitScoresResponse, UpdateUserRequest,
 };
 use python_semantic::rank_guides;
+use score::{ScoreEntryWrite, ScoreService};
 use search::{filter_region, sort_semantic_guides};
 use store::GuideStore;
 use tower_http::cors::{Any, CorsLayer};
@@ -42,6 +45,7 @@ struct AppState {
     google_ai: GoogleAiClient,
     auth: AuthService,
     mail: MailService,
+    scores: ScoreService,
 }
 
 #[derive(Debug)]
@@ -61,11 +65,13 @@ async fn main() {
         GoogleAiClient::from_env().expect("failed to initialize Google AI Studio client");
     let auth = AuthService::load(&database_path).expect("failed to initialize auth service");
     let mail = MailService::load(&database_path).expect("failed to initialize mail service");
+    let scores = ScoreService::load(&database_path).expect("failed to initialize score service");
     let state = AppState {
         store: Arc::new(RwLock::new(store)),
         google_ai,
         auth,
         mail,
+        scores,
     };
 
     let app = Router::new()
@@ -78,6 +84,7 @@ async fn main() {
         .route("/api/mail/send", post(send_mail))
         .route("/api/mail/draft", post(save_draft))
         .route("/api/mail/delete", post(delete_mail))
+        .route("/api/scores", post(submit_scores))
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/{id}", put(update_user))
         .route("/api/users/{id}/deactivate", post(deactivate_user))
@@ -219,6 +226,58 @@ async fn delete_mail(
     let user = state.auth.require_mail_user(&headers).map_err(auth_error)?;
     let response = state.mail.delete_messages(&user, &request.ids).map_err(internal_error_from)?;
     Ok(Json(response))
+}
+
+async fn submit_scores(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SubmitScoresRequest>,
+) -> AppResult<Json<SubmitScoresResponse>> {
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+
+    let judge_name = if matches!(user.role, models::UserRole::Judge) {
+        user.name.clone()
+    } else {
+        request.judge_name.trim().to_string()
+    };
+
+    if judge_name.is_empty() {
+        return Err(bad_request("评委姓名不能为空。".to_string()));
+    }
+
+    let resolved_scores = {
+        let store = state
+            .store
+            .read()
+            .map_err(|_| internal_error("failed to read guide store"))?;
+        let mut seen = std::collections::HashSet::new();
+        let mut resolved = Vec::with_capacity(request.scores.len());
+
+        for entry in request.scores {
+            if !seen.insert(entry.guide_id.clone()) {
+                return Err(bad_request("同一批提交里不能重复选择同一个球场。".to_string()));
+            }
+
+            let guide = store.get(&entry.guide_id).ok_or_else(|| {
+                bad_request("提交中包含不存在的球场，请重新选择。".to_string())
+            })?;
+
+            resolved.push(ScoreEntryWrite {
+                guide_id: guide.id,
+                course_name: guide.course_name,
+                score: entry.score,
+            });
+        }
+
+        resolved
+    };
+
+    let submitted = state
+        .scores
+        .submit_scores(&user, &judge_name, &resolved_scores)
+        .map_err(bad_request)?;
+
+    Ok(Json(SubmitScoresResponse { submitted }))
 }
 
 async fn list_users(

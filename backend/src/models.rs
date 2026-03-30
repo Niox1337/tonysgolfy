@@ -269,3 +269,23 @@ pub struct DeleteMailRequest {
 pub struct DeleteMailResponse {
     pub updated: usize,
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScoreInput {
+    pub guide_id: String,
+    pub score: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitScoresRequest {
+    pub judge_name: String,
+    pub scores: Vec<ScoreInput>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubmitScoresResponse {
+    pub submitted: usize,
+}
