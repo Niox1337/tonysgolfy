@@ -4,7 +4,7 @@ use std::time::Duration;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
-use crate::models::GuideRecord;
+use crate::models::{GuideRecord, GuideScoreRecord};
 
 #[derive(Clone)]
 pub struct GoogleAiClient {
@@ -183,4 +183,105 @@ impl GoogleAiClient {
 
         Ok(text)
     }
+
+    pub async fn calculate_composite_score(
+        &self,
+        course_name: &str,
+        ai_prompt: &str,
+        scores: &[GuideScoreRecord],
+    ) -> Result<f64, String> {
+        let endpoint = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            self.model
+        );
+
+        let score_context = scores
+            .iter()
+            .map(|entry| {
+                format!(
+                    "- 评委: {}\n  操作人: {}\n  分数: {}\n  录入时间: {}",
+                    entry.judge_name, entry.operator_name, entry.score, entry.created_at
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let prompt = format!(
+            "你是 tonysgolfy 的评分分析助手。请根据给定球场评分和用户说明，计算一个 0 到 100 之间的综合评分。\n\
+要求：\n\
+1. 只能输出一个数字，不要输出单位、说明或多余文本。\n\
+2. 结果必须是 0 到 100 之间的小数。\n\
+3. 只基于提供的评分和用户说明进行计算。\n\n\
+球场：{}\n\
+评分记录：\n{}\n\n\
+用户说明：\n{}",
+            course_name.trim(),
+            score_context,
+            ai_prompt.trim()
+        );
+
+        let response = self
+            .http
+            .post(endpoint)
+            .header("x-goog-api-key", &self.api_key)
+            .header("Content-Type", "application/json")
+            .json(&GenerateContentRequest {
+                contents: vec![Content {
+                    parts: vec![Part { text: prompt }],
+                }],
+            })
+            .send()
+            .await
+            .map_err(|error| format!("failed to call Google AI Studio: {error}"))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "failed to read error body".to_string());
+            return Err(format!(
+                "Google AI Studio request failed with {status}: {body}"
+            ));
+        }
+
+        let payload: GenerateContentResponse = response
+            .json()
+            .await
+            .map_err(|error| format!("failed to parse Google AI Studio response: {error}"))?;
+
+        let text = payload
+            .candidates
+            .unwrap_or_default()
+            .into_iter()
+            .flat_map(|candidate| candidate.content.into_iter())
+            .flat_map(|content| content.parts.into_iter())
+            .filter_map(|part| part.text)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        parse_score_value(&text)
+    }
+}
+
+fn parse_score_value(raw: &str) -> Result<f64, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Google AI Studio returned an empty score".to_string());
+    }
+
+    let candidate = trimmed
+        .split(|ch: char| !(ch.is_ascii_digit() || ch == '.'))
+        .find(|part| !part.is_empty())
+        .ok_or_else(|| "Google AI Studio did not return a numeric score".to_string())?;
+
+    let value = candidate
+        .parse::<f64>()
+        .map_err(|_| "Google AI Studio returned an invalid numeric score".to_string())?;
+
+    if !(0.0..=100.0).contains(&value) {
+        return Err("Google AI Studio returned a score outside 0 to 100".to_string());
+    }
+
+    Ok(value)
 }

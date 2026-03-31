@@ -2,6 +2,7 @@ import { startTransition, useDeferredValue, useEffect, useMemo, useState } from 
 import type { ChangeEvent } from 'react'
 import {
   ApiError,
+  calculateCompositeScore,
   changePassword,
   createGuide,
   createUser,
@@ -12,6 +13,7 @@ import {
   generateGuide,
   getSession,
   importGuides,
+  listGuideScores,
   listMailbox,
   listDuplicateGroups,
   listGuides,
@@ -30,6 +32,7 @@ import type {
   DuplicatePreviewMatch,
   GuideInput,
   GuideRecord,
+  GuideScoreRecord,
   ImportAudit,
   MailFolder,
   MailMessage,
@@ -41,7 +44,7 @@ import type {
 } from './api'
 import { ChangePasswordModal } from './modules/auth/components/ChangePasswordModal'
 import { LoginPage } from './modules/auth/components/LoginPage'
-import { LOGIN_ROUTE, MAIL_ROUTE, SCORES_ROUTE, TABLE_ROUTE, USERS_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
+import { COMPOSITE_ROUTE, LOGIN_ROUTE, MAIL_ROUTE, SCORES_ROUTE, TABLE_ROUTE, USERS_ROUTE, navigateTo, normalizeRoute } from './modules/app/routes'
 import { CreateGuideModal } from './modules/guides/components/CreateGuideModal'
 import { EditGuideModal } from './modules/guides/components/EditGuideModal'
 import { GuideDetailPanel } from './modules/guides/components/GuideDetailPanel'
@@ -50,6 +53,7 @@ import { GuideTablePanel } from './modules/guides/components/GuideTablePanel'
 import { HeroPanel } from './modules/guides/components/HeroPanel'
 import { ComposeMailModal } from './modules/mail/components/ComposeMailModal'
 import { MailPage } from './modules/mail/components/MailPage'
+import { CompositeScorePage } from './modules/scores/components/CompositeScorePage'
 import { ScorePage } from './modules/scores/components/ScorePage'
 import type { ScoreRow } from './modules/scores/components/ScorePage'
 import type { FormState, RegionFilter, ThemeMode } from './modules/guides/types'
@@ -130,6 +134,16 @@ function App() {
   const [scoreError, setScoreError] = useState('')
   const [scoreSuccess, setScoreSuccess] = useState('')
   const [isSubmittingScores, setIsSubmittingScores] = useState(false)
+  const [selectedCompositeGuideId, setSelectedCompositeGuideId] = useState<string | null>(null)
+  const [guideScores, setGuideScores] = useState<GuideScoreRecord[]>([])
+  const [selectedGuideScoreIds, setSelectedGuideScoreIds] = useState<string[]>([])
+  const [compositeMethod, setCompositeMethod] = useState<'equal' | 'weighted' | 'ai'>('equal')
+  const [compositeWeights, setCompositeWeights] = useState<Record<string, string>>({})
+  const [compositeAiPrompt, setCompositeAiPrompt] = useState('')
+  const [compositeError, setCompositeError] = useState('')
+  const [compositeSuccess, setCompositeSuccess] = useState('')
+  const [isLoadingGuideScores, setIsLoadingGuideScores] = useState(false)
+  const [isCalculatingComposite, setIsCalculatingComposite] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [regionFilter, setRegionFilter] = useState<RegionFilter>('all')
@@ -250,7 +264,7 @@ function App() {
     if (
       isCheckingSession ||
       !isAuthenticated ||
-      (currentRoute !== TABLE_ROUTE && currentRoute !== SCORES_ROUTE)
+      (currentRoute !== TABLE_ROUTE && currentRoute !== SCORES_ROUTE && currentRoute !== COMPOSITE_ROUTE)
     ) {
       setIsLoading(false)
       return
@@ -441,9 +455,51 @@ function App() {
     }
   }, [currentRoute, form, isAuthenticated, isCheckingSession, isCreateModalOpen])
 
+  useEffect(() => {
+    if (!isAuthenticated || currentRoute !== COMPOSITE_ROUTE || !selectedCompositeGuideId) {
+      setGuideScores([])
+      setSelectedGuideScoreIds([])
+      return
+    }
+
+    const guideId = selectedCompositeGuideId
+    let cancelled = false
+
+    async function loadGuideScores() {
+      try {
+        setIsLoadingGuideScores(true)
+        setCompositeError('')
+        const response = await listGuideScores(guideId)
+        if (cancelled) return
+        setGuideScores(response.scores)
+        setSelectedGuideScoreIds((current) => current.filter((id) => response.scores.some((score) => score.id === id)))
+      } catch (error) {
+        if (!cancelled) {
+          setGuideScores([])
+          setSelectedGuideScoreIds([])
+          setCompositeError(error instanceof Error ? error.message : '加载评分失败。')
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingGuideScores(false)
+        }
+      }
+    }
+
+    loadGuideScores()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentRoute, isAuthenticated, reloadToken, selectedCompositeGuideId])
+
   const activeRecord = useMemo(
     () => allRecords.find((record) => record.id === activeId) ?? null,
     [activeId, allRecords],
+  )
+  const editingRecord = useMemo(
+    () => allRecords.find((record) => record.id === editingId) ?? null,
+    [allRecords, editingId],
   )
 
   const regionOptions = useMemo(
@@ -730,6 +786,10 @@ function App() {
       setScoreError('')
       setScoreSuccess('')
       setScoreRows([createScoreRow()])
+      setGuideScores([])
+      setSelectedGuideScoreIds([])
+      setCompositeError('')
+      setCompositeSuccess('')
       setIsCreateModalOpen(false)
       setEditingId(null)
       setIsChangePasswordOpen(false)
@@ -1005,6 +1065,78 @@ function App() {
     }
   }
 
+  function updateGuideCaches(updatedGuide: GuideRecord) {
+    setAllRecords((current) => current.map((guide) => (guide.id === updatedGuide.id ? updatedGuide : guide)))
+    setRecords((current) => current.map((guide) => (guide.id === updatedGuide.id ? updatedGuide : guide)))
+  }
+
+  function handleSelectCompositeGuide(guide: GuideRecord) {
+    setSelectedCompositeGuideId(guide.id)
+    setSelectedGuideScoreIds([])
+    setCompositeWeights({})
+    setCompositeAiPrompt('')
+    setCompositeError('')
+    setCompositeSuccess('')
+  }
+
+  function handleToggleGuideScore(scoreId: string) {
+    setCompositeError('')
+    setCompositeSuccess('')
+    setSelectedGuideScoreIds((current) =>
+      current.includes(scoreId) ? current.filter((id) => id !== scoreId) : [...current, scoreId],
+    )
+  }
+
+  function handleToggleAllGuideScores() {
+    if (guideScores.length === 0) return
+    const allSelected = guideScores.every((score) => selectedGuideScoreIds.includes(score.id))
+    setSelectedGuideScoreIds(allSelected ? [] : guideScores.map((score) => score.id))
+  }
+
+  function handleCompositeWeightChange(scoreId: string, value: string) {
+    setCompositeError('')
+    setCompositeSuccess('')
+    setCompositeWeights((current) => ({ ...current, [scoreId]: value }))
+  }
+
+  async function handleCalculateCompositeScore() {
+    if (!selectedCompositeGuideId) {
+      setCompositeError('请先选择球场。')
+      return
+    }
+    if (selectedGuideScoreIds.length === 0) {
+      setCompositeError('请至少选择一条评分。')
+      return
+    }
+
+    try {
+      setIsCalculatingComposite(true)
+      setCompositeError('')
+      setCompositeSuccess('')
+
+      const response = await calculateCompositeScore({
+        guideId: selectedCompositeGuideId,
+        scoreIds: selectedGuideScoreIds,
+        method: compositeMethod,
+        weights:
+          compositeMethod === 'weighted'
+            ? selectedGuideScoreIds.map((scoreId) => ({
+                scoreId,
+                weight: Number(compositeWeights[scoreId] ?? ''),
+              }))
+            : undefined,
+        aiPrompt: compositeMethod === 'ai' ? compositeAiPrompt : undefined,
+      })
+
+      updateGuideCaches(response.guide)
+      setCompositeSuccess(`已写入综合评分 ${response.calculatedScore}。`)
+    } catch (error) {
+      setCompositeError(error instanceof Error ? error.message : '计算综合评分失败。')
+    } finally {
+      setIsCalculatingComposite(false)
+    }
+  }
+
   if (isCheckingSession) {
     return (
       <main className="auth-shell">
@@ -1052,6 +1184,8 @@ function App() {
               ? 'mail'
               : currentRoute === SCORES_ROUTE
                 ? 'scores'
+                : currentRoute === COMPOSITE_ROUTE
+                  ? 'composite'
                 : 'table'
         }
         currentUserName={sessionUser.name}
@@ -1066,6 +1200,10 @@ function App() {
         onOpenScores={() => {
           setIsSidebarOpen(false)
           navigateTo(SCORES_ROUTE)
+        }}
+        onOpenComposite={() => {
+          setIsSidebarOpen(false)
+          navigateTo(COMPOSITE_ROUTE)
         }}
         onOpenUsers={() => {
           setIsSidebarOpen(false)
@@ -1134,6 +1272,27 @@ function App() {
             onChooseGuide={handleChooseScoreGuide}
             onScoreChange={handleScoreValueChange}
             onSubmit={handleSubmitScores}
+          />
+        ) : currentRoute === COMPOSITE_ROUTE ? (
+          <CompositeScorePage
+            guides={allRecords}
+            selectedGuideId={selectedCompositeGuideId}
+            scores={guideScores}
+            selectedScoreIds={selectedGuideScoreIds}
+            method={compositeMethod}
+            aiPrompt={compositeAiPrompt}
+            weights={compositeWeights}
+            errorMessage={compositeError}
+            successMessage={compositeSuccess}
+            isLoadingScores={isLoadingGuideScores}
+            isCalculating={isCalculatingComposite}
+            onGuideSelect={handleSelectCompositeGuide}
+            onToggleScore={handleToggleGuideScore}
+            onToggleAllScores={handleToggleAllGuideScores}
+            onMethodChange={setCompositeMethod}
+            onAiPromptChange={setCompositeAiPrompt}
+            onWeightChange={handleCompositeWeightChange}
+            onCalculate={handleCalculateCompositeScore}
           />
         ) : (
           <section className="workspace-grid">
@@ -1209,6 +1368,7 @@ function App() {
       <EditGuideModal
         editingId={editingId}
         editingForm={editingForm}
+        compositeScore={editingRecord?.compositeScore ?? null}
         onUpdateEditingForm={updateEditingForm}
         onSave={saveEditing}
         onCancel={cancelEditing}

@@ -4,7 +4,7 @@ import type { UserRole } from '../../../api'
 type HeroPanelProps = {
   isOpen: boolean
   theme: ThemeMode
-  currentRoute: 'table' | 'users' | 'mail' | 'scores'
+  currentRoute: 'table' | 'users' | 'mail' | 'scores' | 'composite'
   currentUserName: string
   currentUserRole: UserRole
   allRecordsCount: number
@@ -12,6 +12,7 @@ type HeroPanelProps = {
   onToggleTheme: () => void
   onOpenTable: () => void
   onOpenScores: () => void
+  onOpenComposite: () => void
   onOpenUsers: () => void
   onOpenMail: () => void
   onOpenChangePassword: () => void
@@ -29,6 +30,7 @@ export function HeroPanel({
   onToggleTheme,
   onOpenTable,
   onOpenScores,
+  onOpenComposite,
   onOpenUsers,
   onOpenMail,
   onOpenChangePassword,
@@ -50,6 +52,13 @@ export function HeroPanel({
         </button>
         <button className={currentRoute === 'scores' ? 'primary' : 'ghost'} type="button" onClick={onOpenScores}>
           球场评分
+        </button>
+        <button
+          className={currentRoute === 'composite' ? 'primary' : 'ghost'}
+          type="button"
+          onClick={onOpenComposite}
+        >
+          计算评分
         </button>
         {currentUserRole !== 'judge' ? (
           <button className={currentRoute === 'mail' ? 'primary' : 'ghost'} type="button" onClick={onOpenMail}>

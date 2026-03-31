@@ -10,6 +10,7 @@ pub struct GuideRecord {
     pub green_fee: u32,
     pub best_season: String,
     pub notes: String,
+    pub composite_score: Option<f64>,
     pub updated_at: String,
 }
 
@@ -288,4 +289,64 @@ pub struct SubmitScoresRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SubmitScoresResponse {
     pub submitted: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideScoreRecord {
+    pub id: String,
+    pub guide_id: String,
+    pub course_name: String,
+    pub judge_name: String,
+    pub operator_name: String,
+    pub score: f64,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideScoreListResponse {
+    pub guide_id: String,
+    pub course_name: String,
+    pub scores: Vec<GuideScoreRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideScoresQuery {
+    pub guide_id: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CompositeScoreMethod {
+    Equal,
+    Weighted,
+    Ai,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WeightedScoreInput {
+    pub score_id: String,
+    pub weight: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalculateCompositeScoreRequest {
+    pub guide_id: String,
+    pub score_ids: Vec<String>,
+    pub method: CompositeScoreMethod,
+    pub weights: Option<Vec<WeightedScoreInput>>,
+    pub ai_prompt: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalculateCompositeScoreResponse {
+    pub guide: GuideRecord,
+    pub used_scores: Vec<GuideScoreRecord>,
+    pub calculated_score: f64,
+    pub method: &'static str,
 }

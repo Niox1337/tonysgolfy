@@ -3,12 +3,14 @@ export const TABLE_ROUTE = '/table'
 export const USERS_ROUTE = '/users'
 export const MAIL_ROUTE = '/mail'
 export const SCORES_ROUTE = '/scores'
+export const COMPOSITE_ROUTE = '/composite-score'
 
 export function normalizeRoute(pathname: string) {
   if (pathname === TABLE_ROUTE) return TABLE_ROUTE
   if (pathname === USERS_ROUTE) return USERS_ROUTE
   if (pathname === MAIL_ROUTE) return MAIL_ROUTE
   if (pathname === SCORES_ROUTE) return SCORES_ROUTE
+  if (pathname === COMPOSITE_ROUTE) return COMPOSITE_ROUTE
   return LOGIN_ROUTE
 }
 

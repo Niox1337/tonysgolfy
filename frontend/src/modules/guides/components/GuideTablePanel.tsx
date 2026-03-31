@@ -108,6 +108,7 @@ export function GuideTablePanel({
               <th>代号</th>
               <th>果岭费</th>
               <th>最佳季节</th>
+              <th>综合评分</th>
               <th>更新时间</th>
               <th>操作</th>
             </tr>
@@ -136,6 +137,7 @@ export function GuideTablePanel({
                   <td>{record.courseCode}</td>
                   <td>¥{record.greenFee}</td>
                   <td>{record.bestSeason}</td>
+                  <td>{record.compositeScore == null ? 'N/A' : record.compositeScore}</td>
                   <td>{new Date(record.updatedAt).toLocaleString()}</td>
                   <td onClick={(event) => event.stopPropagation()}>
                     <button className="ghost compact row-edit" type="button" onClick={() => onStartEditing(record)}>

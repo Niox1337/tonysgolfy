@@ -74,6 +74,7 @@ impl GuideStore {
             green_fee: input.green_fee,
             best_season: input.best_season.trim().to_string(),
             notes: input.notes.trim().to_string(),
+            composite_score: None,
             updated_at: Utc::now().to_rfc3339(),
         };
 
@@ -139,6 +140,26 @@ impl GuideStore {
         duplicate_groups(&self.guides)
     }
 
+    pub fn set_composite_score(
+        &mut self,
+        id: &str,
+        composite_score: Option<f64>,
+    ) -> Result<Option<GuideRecord>, String> {
+        let Some(index) = self.guides.iter().position(|guide| guide.id == id) else {
+            return Ok(None);
+        };
+
+        let mut updated = self.guides[index].clone();
+        updated.composite_score = composite_score;
+        updated.updated_at = Utc::now().to_rfc3339();
+
+        let connection = open_database(&self.database_path)?;
+        update_guide_row(&connection, &updated)?;
+
+        self.guides[index] = updated.clone();
+        Ok(Some(updated))
+    }
+
     pub fn import_guides(&mut self, inputs: Vec<GuideInput>) -> Result<ImportResponse, String> {
         for input in &inputs {
             validate_guide_input(input)?;
@@ -154,6 +175,7 @@ impl GuideStore {
                 green_fee: input.green_fee,
                 best_season: input.best_season.trim().to_string(),
                 notes: input.notes.trim().to_string(),
+                composite_score: None,
                 updated_at: Utc::now().to_rfc3339(),
             })
             .collect::<Vec<_>>();
@@ -201,6 +223,7 @@ impl GuideStore {
                 "greenFee",
                 "bestSeason",
                 "notes",
+                "compositeScore",
                 "updatedAt",
             ])
             .map_err(|error| error.to_string())?;
@@ -214,6 +237,9 @@ impl GuideStore {
                     guide.green_fee.to_string(),
                     guide.best_season,
                     guide.notes,
+                    guide.composite_score
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
                     guide.updated_at,
                 ])
                 .map_err(|error| error.to_string())?;
@@ -240,6 +266,7 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
                 green_fee INTEGER NOT NULL,
                 best_season TEXT NOT NULL,
                 notes TEXT NOT NULL,
+                composite_score REAL,
                 updated_at TEXT NOT NULL
             );
 
@@ -247,14 +274,16 @@ fn initialize_schema(connection: &Connection) -> Result<(), String> {
             CREATE INDEX IF NOT EXISTS idx_guides_updated_at ON guides(updated_at);
             ",
         )
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+
+    ensure_column(connection, "guides", "composite_score", "REAL")
 }
 
 fn load_guides(connection: &Connection) -> Result<Vec<GuideRecord>, String> {
     let mut statement = connection
         .prepare(
             "
-            SELECT id, course_name, region, course_code, green_fee, best_season, notes, updated_at
+            SELECT id, course_name, region, course_code, green_fee, best_season, notes, composite_score, updated_at
             FROM guides
             ORDER BY updated_at DESC, rowid DESC
             ",
@@ -271,7 +300,8 @@ fn load_guides(connection: &Connection) -> Result<Vec<GuideRecord>, String> {
                 green_fee: row.get(4)?,
                 best_season: row.get(5)?,
                 notes: row.get(6)?,
-                updated_at: row.get(7)?,
+                composite_score: row.get(7)?,
+                updated_at: row.get(8)?,
             })
         })
         .map_err(|error| error.to_string())?;
@@ -293,8 +323,8 @@ fn insert_guides(connection: &mut Connection, guides: &[GuideRecord]) -> Result<
             .prepare(
                 "
                 INSERT INTO guides (
-                    id, course_name, region, course_code, green_fee, best_season, notes, updated_at
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    id, course_name, region, course_code, green_fee, best_season, notes, composite_score, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                 ",
             )
             .map_err(|error| error.to_string())?;
@@ -309,6 +339,7 @@ fn insert_guides(connection: &mut Connection, guides: &[GuideRecord]) -> Result<
                     guide.green_fee,
                     &guide.best_season,
                     &guide.notes,
+                    &guide.composite_score,
                     &guide.updated_at
                 ])
                 .map_err(|error| error.to_string())?;
@@ -328,7 +359,8 @@ fn update_guide_row(connection: &Connection, guide: &GuideRecord) -> Result<(), 
                 green_fee = ?5,
                 best_season = ?6,
                 notes = ?7,
-                updated_at = ?8
+                composite_score = ?8,
+                updated_at = ?9
             WHERE id = ?1
             ",
             params![
@@ -339,6 +371,7 @@ fn update_guide_row(connection: &Connection, guide: &GuideRecord) -> Result<(), 
                 guide.green_fee,
                 &guide.best_season,
                 &guide.notes,
+                &guide.composite_score,
                 &guide.updated_at
             ],
         )
@@ -378,6 +411,7 @@ fn seed_guides() -> Vec<GuideRecord> {
             green_fee: 2380,
             best_season: "October to December".to_string(),
             notes: "适合安排 2 天游玩，球场维护优秀，建议住度假酒店。".to_string(),
+            composite_score: None,
             updated_at: timestamp.clone(),
         },
         GuideRecord {
@@ -388,6 +422,7 @@ fn seed_guides() -> Vec<GuideRecord> {
             green_fee: 3100,
             best_season: "February to April".to_string(),
             notes: "适合城市高尔夫短途，夜间餐厅选择多，机场交通方便。".to_string(),
+            composite_score: None,
             updated_at: timestamp.clone(),
         },
         GuideRecord {
@@ -398,6 +433,7 @@ fn seed_guides() -> Vec<GuideRecord> {
             green_fee: 4200,
             best_season: "November to March".to_string(),
             notes: "悬崖海景极强，适合做高端目的地专题，建议自驾。".to_string(),
+            composite_score: None,
             updated_at: timestamp.clone(),
         },
         GuideRecord {
@@ -408,6 +444,7 @@ fn seed_guides() -> Vec<GuideRecord> {
             green_fee: 2280,
             best_season: "October to December".to_string(),
             notes: "重复样例，用于演示球场攻略去重审计。".to_string(),
+            composite_score: None,
             updated_at: timestamp,
         },
     ]
@@ -426,6 +463,35 @@ fn load_legacy_guides(database_path: &Path) -> Result<Option<Vec<GuideRecord>>, 
     let content = fs::read_to_string(legacy_path).map_err(|error| error.to_string())?;
     let guides = serde_json::from_str(&content).map_err(|error| error.to_string())?;
     Ok(Some(guides))
+}
+
+fn ensure_column(
+    connection: &Connection,
+    table_name: &str,
+    column_name: &str,
+    definition: &str,
+) -> Result<(), String> {
+    let pragma = format!("PRAGMA table_info({table_name})");
+    let mut statement = connection
+        .prepare(&pragma)
+        .map_err(|error| error.to_string())?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    if columns.iter().any(|existing| existing == column_name) {
+        return Ok(());
+    }
+
+    connection
+        .execute(
+            &format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"),
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 #[cfg(test)]

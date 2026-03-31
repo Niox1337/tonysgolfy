@@ -248,6 +248,7 @@ mod tests {
             green_fee: 3100,
             best_season: "February to April".to_string(),
             notes: "适合城市高尔夫短途，机场交通方便。".to_string(),
+            composite_score: None,
             updated_at: "2026-01-01T00:00:00Z".to_string(),
         }
     }

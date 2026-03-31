@@ -9,6 +9,7 @@ export type GuideRecord = {
   greenFee: number
   bestSeason: string
   notes: string
+  compositeScore: number | null
   updatedAt: string
 }
 
@@ -90,6 +91,25 @@ export type MailboxResponse = {
 export type ScoreSubmission = {
   guideId: string
   score: number
+}
+
+export type GuideScoreRecord = {
+  id: string
+  guideId: string
+  courseName: string
+  judgeName: string
+  operatorName: string
+  score: number
+  createdAt: string
+}
+
+export type CompositeScoreMethod = 'equal' | 'weighted' | 'ai'
+
+export type CompositeScoreResponse = {
+  guide: GuideRecord
+  usedScores: GuideScoreRecord[]
+  calculatedScore: number
+  method: CompositeScoreMethod
 }
 
 type GuideListResponse = {
@@ -280,6 +300,25 @@ export async function submitScores(input: { judgeName: string; scores: ScoreSubm
     method: 'POST',
     body: JSON.stringify(input),
   })
+}
+
+export async function listGuideScores(guideId: string) {
+  return requestJson<{ guideId: string; courseName: string; scores: GuideScoreRecord[] }>(
+    `/api/scores/by-guide?guideId=${encodeURIComponent(guideId)}`,
+  )
+}
+
+export async function calculateCompositeScore(input: {
+  guideId: string
+  scoreIds: string[]
+  method: CompositeScoreMethod
+  weights?: { scoreId: string; weight: number }[]
+  aiPrompt?: string
+}) {
+  return requestJson<CompositeScoreResponse>('/api/guides/composite-score', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  }, 50000)
 }
 
 export async function createGuide(input: GuideInput) {

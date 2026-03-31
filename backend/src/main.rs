@@ -27,11 +27,12 @@ use axum::{
 use google_ai::GoogleAiClient;
 use mail::MailService;
 use models::{
-    BulkDeleteRequest, BulkDeleteResponse, ChangePasswordRequest, CreateUserRequest,
-    DeleteMailRequest, DeleteMailResponse, GenerateGuideRequest, GenerateGuideResponse, GuideInput,
-    GuideListResponse, GuidesQuery, HealthResponse, ImportRequest, LoginRequest, MailQuery,
-    MailboxResponse, SaveDraftRequest, SendMailRequest, SessionResponse, SubmitScoresRequest,
-    SubmitScoresResponse, UpdateUserRequest,
+    BulkDeleteRequest, BulkDeleteResponse, CalculateCompositeScoreRequest,
+    CalculateCompositeScoreResponse, ChangePasswordRequest, CreateUserRequest, DeleteMailRequest,
+    DeleteMailResponse, GenerateGuideRequest, GenerateGuideResponse, GuideInput, GuideListResponse,
+    GuideScoresQuery, GuideScoreListResponse, GuidesQuery, HealthResponse, ImportRequest,
+    LoginRequest, MailQuery, MailboxResponse, SaveDraftRequest, SendMailRequest, SessionResponse,
+    SubmitScoresRequest, SubmitScoresResponse, UpdateUserRequest,
 };
 use python_semantic::rank_guides;
 use score::{ScoreEntryWrite, ScoreService};
@@ -85,6 +86,8 @@ async fn main() {
         .route("/api/mail/draft", post(save_draft))
         .route("/api/mail/delete", post(delete_mail))
         .route("/api/scores", post(submit_scores))
+        .route("/api/scores/by-guide", get(list_scores_for_guide))
+        .route("/api/guides/composite-score", post(calculate_composite_score))
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/users/{id}", put(update_user))
         .route("/api/users/{id}/deactivate", post(deactivate_user))
@@ -278,6 +281,108 @@ async fn submit_scores(
         .map_err(bad_request)?;
 
     Ok(Json(SubmitScoresResponse { submitted }))
+}
+
+async fn list_scores_for_guide(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<GuideScoresQuery>,
+) -> AppResult<Json<GuideScoreListResponse>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let response = state
+        .scores
+        .list_scores_for_guide(&query.guide_id)
+        .map_err(internal_error_from)?;
+    Ok(Json(response))
+}
+
+async fn calculate_composite_score(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CalculateCompositeScoreRequest>,
+) -> AppResult<Json<CalculateCompositeScoreResponse>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
+
+    let selected = state
+        .scores
+        .selected_scores_for_guide(&request.guide_id, &request.score_ids)
+        .map_err(bad_request)?;
+
+    let calculated = match request.method {
+        models::CompositeScoreMethod::Equal => {
+            let total = selected.scores.iter().map(|entry| entry.score).sum::<f64>();
+            total / selected.scores.len() as f64
+        }
+        models::CompositeScoreMethod::Weighted => {
+            let weights = request
+                .weights
+                .ok_or_else(|| bad_request("加权评分需要提供每条评分的权重。".to_string()))?;
+
+            if weights.len() != selected.scores.len() {
+                return Err(bad_request("每条选中评分都需要对应一个权重。".to_string()));
+            }
+
+            let mut by_id = std::collections::HashMap::new();
+            let mut weight_sum = 0.0_f64;
+            for weight in weights {
+                if !weight.weight.is_finite() || weight.weight < 0.0 {
+                    return Err(bad_request("权重必须是非负数字。".to_string()));
+                }
+                weight_sum += weight.weight;
+                by_id.insert(weight.score_id, weight.weight);
+            }
+
+            if (weight_sum - 1.0).abs() > 0.000001 {
+                return Err(bad_request("权重之和必须等于 1.0。".to_string()));
+            }
+
+            let mut total = 0.0_f64;
+            for entry in &selected.scores {
+                let weight = by_id
+                    .get(&entry.id)
+                    .ok_or_else(|| bad_request("权重和选中评分不匹配。".to_string()))?;
+                total += entry.score * weight;
+            }
+            total
+        }
+        models::CompositeScoreMethod::Ai => {
+            let prompt = request
+                .ai_prompt
+                .ok_or_else(|| bad_request("AI 计算需要提供说明文字。".to_string()))?;
+            if prompt.trim().is_empty() {
+                return Err(bad_request("AI 计算说明不能为空。".to_string()));
+            }
+
+            state
+                .google_ai
+                .calculate_composite_score(&selected.course_name, &prompt, &selected.scores)
+                .await
+                .map_err(internal_error_from)?
+        }
+    };
+
+    let rounded = (calculated * 100.0).round() / 100.0;
+    let guide = {
+        let mut store = state
+            .store
+            .write()
+            .map_err(|_| internal_error("failed to write guide store"))?;
+        store
+            .set_composite_score(&request.guide_id, Some(rounded))
+            .map_err(internal_error_from)?
+            .ok_or_else(|| bad_request("球场不存在。".to_string()))?
+    };
+
+    Ok(Json(CalculateCompositeScoreResponse {
+        guide,
+        used_scores: selected.scores,
+        calculated_score: rounded,
+        method: match request.method {
+            models::CompositeScoreMethod::Equal => "equal",
+            models::CompositeScoreMethod::Weighted => "weighted",
+            models::CompositeScoreMethod::Ai => "ai",
+        },
+    }))
 }
 
 async fn list_users(

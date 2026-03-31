@@ -3,6 +3,7 @@ import type { FormState } from '../types'
 type EditGuideModalProps = {
   editingId: string | null
   editingForm: FormState
+  compositeScore: number | null
   onUpdateEditingForm: <K extends keyof FormState>(key: K, value: FormState[K]) => void
   onSave: () => Promise<void>
   onCancel: () => void
@@ -11,6 +12,7 @@ type EditGuideModalProps = {
 export function EditGuideModal({
   editingId,
   editingForm,
+  compositeScore,
   onUpdateEditingForm,
   onSave,
   onCancel,
@@ -60,6 +62,10 @@ export function EditGuideModal({
               value={editingForm.bestSeason}
               onChange={(event) => onUpdateEditingForm('bestSeason', event.target.value)}
             />
+          </label>
+          <label>
+            综合评分
+            <input readOnly value={compositeScore == null ? 'N/A' : compositeScore} />
           </label>
           <label className="wide">
             旅行备注
