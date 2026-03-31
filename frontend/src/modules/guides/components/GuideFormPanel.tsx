@@ -1,4 +1,6 @@
 import type { ChangeEvent } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 import type { ImportAudit } from '../../../api'
 
 type GuideFormPanelProps = {
@@ -74,7 +76,9 @@ export function GuideFormPanel({
             {isGeneratingGuide ? '生成中...' : '生成攻略'}
           </button>
         </div>
-        <pre className="guide-output">{generatedGuide}</pre>
+        <div className="guide-output">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{generatedGuide}</ReactMarkdown>
+        </div>
       </div>
 
       <div className="subpanel">
