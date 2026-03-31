@@ -1,5 +1,5 @@
 mod auth;
-mod google_ai;
+mod kimi_ai;
 mod mail;
 mod models;
 mod python_semantic;
@@ -24,7 +24,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
 };
-use google_ai::GoogleAiClient;
+use kimi_ai::KimiClient;
 use mail::MailService;
 use models::{
     BulkDeleteRequest, BulkDeleteResponse, CalculateCompositeScoreRequest,
@@ -43,7 +43,7 @@ use tower_http::cors::{Any, CorsLayer};
 #[derive(Clone)]
 struct AppState {
     store: Arc<RwLock<GuideStore>>,
-    google_ai: GoogleAiClient,
+    kimi_ai: KimiClient,
     auth: AuthService,
     mail: MailService,
     scores: ScoreService,
@@ -62,14 +62,13 @@ async fn main() {
     dotenvy::dotenv().ok();
     let database_path = database_path();
     let store = GuideStore::load(database_path.clone()).expect("failed to initialize guide store");
-    let google_ai =
-        GoogleAiClient::from_env().expect("failed to initialize Google AI Studio client");
+    let kimi_ai = KimiClient::from_env().expect("failed to initialize Kimi client");
     let auth = AuthService::load(&database_path).expect("failed to initialize auth service");
     let mail = MailService::load(&database_path).expect("failed to initialize mail service");
     let scores = ScoreService::load(&database_path).expect("failed to initialize score service");
     let state = AppState {
         store: Arc::new(RwLock::new(store)),
-        google_ai,
+        kimi_ai,
         auth,
         mail,
         scores,
@@ -360,7 +359,7 @@ async fn calculate_composite_score(
             }
 
             state
-                .google_ai
+                .kimi_ai
                 .calculate_composite_score(&selected.course_name, &prompt, &selected.scores)
                 .await
                 .map_err(internal_error_from)?
@@ -629,7 +628,7 @@ async fn generate_travel_guide(
         list_guides_with_semantic_support(&store, &query).map_err(internal_error_from)?
     };
     let guide = state
-        .google_ai
+        .kimi_ai
         .generate_travel_guide(&request.prompt, &filtered_guides)
         .await
         .map_err(internal_error_from)?;
