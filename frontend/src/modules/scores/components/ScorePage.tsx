@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import type { ChangeEvent } from 'react'
 
 import type { GuideRecord } from '../../../api'
 
@@ -19,9 +18,6 @@ type ScorePageProps = {
   successMessage: string
   isSubmitting: boolean
   onJudgeNameChange: (value: string) => void
-  onImport: (event: ChangeEvent<HTMLInputElement>) => Promise<void>
-  onExportCsv: () => Promise<void>
-  onExportExcel: () => Promise<void>
   onAddRow: () => void
   onRemoveRow: (id: string) => void
   onChooseGuide: (rowId: string, guide: GuideRecord) => void
@@ -38,9 +34,6 @@ export function ScorePage({
   successMessage,
   isSubmitting,
   onJudgeNameChange,
-  onImport,
-  onExportCsv,
-  onExportExcel,
   onAddRow,
   onRemoveRow,
   onChooseGuide,
@@ -70,19 +63,6 @@ export function ScorePage({
               <h2>球场评分</h2>
               <p className="helper-text">每次可提交多条球场评分。</p>
             </div>
-          </div>
-
-          <div className="action-row">
-            <label className="file-button">
-              导入 Excel / CSV
-              <input type="file" accept=".csv,.xlsx,.xls" onChange={onImport} />
-            </label>
-            <button className="ghost" type="button" onClick={onExportCsv}>
-              导出 CSV
-            </button>
-            <button className="ghost" type="button" onClick={() => void onExportExcel()}>
-              导出 Excel
-            </button>
           </div>
 
           <div className="field-grid">

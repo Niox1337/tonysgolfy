@@ -1080,8 +1080,8 @@ function App() {
     if (!file) return
 
     try {
-      setScoreError('')
-      setScoreSuccess('')
+      setCompositeError('')
+      setCompositeSuccess('')
       let imported = []
 
       if (file.name.toLowerCase().endsWith('.csv')) {
@@ -1110,18 +1110,18 @@ function App() {
       }
 
       const response = await importScores(imported)
-      setScoreSuccess(`已导入 ${response.inserted} 条球场评分。`)
+      setCompositeSuccess(`已导入 ${response.inserted} 条球场评分。`)
       event.target.value = ''
     } catch (error) {
-      setScoreError(error instanceof Error ? error.message : '导入评分失败。')
+      setCompositeError(error instanceof Error ? error.message : '导入评分失败。')
       event.target.value = ''
     }
   }
 
   async function handleExportScoresCsv() {
     try {
-      setScoreError('')
-      setScoreSuccess('')
+      setCompositeError('')
+      setCompositeSuccess('')
       const blob = await downloadScoresCsv()
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
@@ -1130,14 +1130,14 @@ function App() {
       link.click()
       URL.revokeObjectURL(url)
     } catch (error) {
-      setScoreError(error instanceof Error ? error.message : '导出评分失败。')
+      setCompositeError(error instanceof Error ? error.message : '导出评分失败。')
     }
   }
 
   async function handleExportScoresExcel() {
     try {
-      setScoreError('')
-      setScoreSuccess('')
+      setCompositeError('')
+      setCompositeSuccess('')
 
       if (!window.XLSX) {
         throw new Error('Excel 导出组件尚未就绪，请刷新页面后重试。')
@@ -1161,7 +1161,7 @@ function App() {
         `tonysgolfy-scores-${new Date().toISOString().slice(0, 10)}.xlsx`,
       )
     } catch (error) {
-      setScoreError(error instanceof Error ? error.message : '导出 Excel 失败。')
+      setCompositeError(error instanceof Error ? error.message : '导出 Excel 失败。')
     }
   }
 
@@ -1367,9 +1367,6 @@ function App() {
             successMessage={scoreSuccess}
             isSubmitting={isSubmittingScores}
             onJudgeNameChange={setScoreJudgeName}
-            onImport={handleImportScores}
-            onExportCsv={handleExportScoresCsv}
-            onExportExcel={handleExportScoresExcel}
             onAddRow={handleAddScoreRow}
             onRemoveRow={handleRemoveScoreRow}
             onChooseGuide={handleChooseScoreGuide}
@@ -1389,6 +1386,9 @@ function App() {
             successMessage={compositeSuccess}
             isLoadingScores={isLoadingGuideScores}
             isCalculating={isCalculatingComposite}
+            onImportScores={handleImportScores}
+            onExportScoresCsv={handleExportScoresCsv}
+            onExportScoresExcel={handleExportScoresExcel}
             onGuideSelect={handleSelectCompositeGuide}
             onToggleScore={handleToggleGuideScore}
             onToggleAllScores={handleToggleAllGuideScores}

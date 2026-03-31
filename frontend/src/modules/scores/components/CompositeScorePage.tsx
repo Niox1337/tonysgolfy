@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { ChangeEvent } from 'react'
 
 import type { CompositeScoreMethod, GuideRecord, GuideScoreRecord } from '../../../api'
 
@@ -14,6 +15,9 @@ type CompositeScorePageProps = {
   successMessage: string
   isLoadingScores: boolean
   isCalculating: boolean
+  onImportScores: (event: ChangeEvent<HTMLInputElement>) => Promise<void>
+  onExportScoresCsv: () => Promise<void>
+  onExportScoresExcel: () => Promise<void>
   onGuideSelect: (guide: GuideRecord) => void
   onToggleScore: (scoreId: string) => void
   onToggleAllScores: () => void
@@ -35,6 +39,9 @@ export function CompositeScorePage({
   successMessage,
   isLoadingScores,
   isCalculating,
+  onImportScores,
+  onExportScoresCsv,
+  onExportScoresExcel,
   onGuideSelect,
   onToggleScore,
   onToggleAllScores,
@@ -68,6 +75,19 @@ export function CompositeScorePage({
               <h2>计算综合评分</h2>
               <p className="helper-text">先选择球场，再从现有评分中勾选参与计算的记录。</p>
             </div>
+          </div>
+
+          <div className="action-row">
+            <label className="file-button">
+              导入 Excel / CSV
+              <input type="file" accept=".csv,.xlsx,.xls" onChange={onImportScores} />
+            </label>
+            <button className="ghost" type="button" onClick={onExportScoresCsv}>
+              导出 CSV
+            </button>
+            <button className="ghost" type="button" onClick={() => void onExportScoresExcel()}>
+              导出 Excel
+            </button>
           </div>
 
           <div className="field-grid">
