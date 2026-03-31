@@ -1,5 +1,6 @@
 use std::env;
-use std::time::Duration;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use reqwest::Client;
 use serde::Serialize;
@@ -9,6 +10,8 @@ use crate::models::{GuideRecord, GuideScoreRecord};
 
 const DEFAULT_KIMI_BASE_URL: &str = "https://api.moonshot.cn/v1";
 const DEFAULT_KIMI_MODEL: &str = "kimi-k2.5";
+const MINIMUM_AVAILABLE_BALANCE_CNY: f64 = 5.0;
+const BALANCE_CACHE_TTL: Duration = Duration::from_secs(60);
 
 #[derive(Clone)]
 pub struct KimiClient {
@@ -16,6 +19,7 @@ pub struct KimiClient {
     api_key: String,
     model: String,
     base_url: String,
+    balance_cache: Arc<RwLock<Option<BalanceSnapshot>>>,
 }
 
 #[derive(Serialize)]
@@ -50,6 +54,12 @@ struct ChatMessage {
 struct ThinkingConfig {
     #[serde(rename = "type")]
     kind: &'static str,
+}
+
+#[derive(Clone)]
+struct BalanceSnapshot {
+    available_balance: f64,
+    checked_at: Instant,
 }
 
 impl KimiClient {
@@ -89,6 +99,7 @@ impl KimiClient {
             api_key,
             model,
             base_url,
+            balance_cache: Arc::new(RwLock::new(None)),
         })
     }
 
@@ -97,6 +108,8 @@ impl KimiClient {
         user_prompt: &str,
         guides: &[GuideRecord],
     ) -> Result<String, String> {
+        self.ensure_sufficient_balance().await?;
+
         let context = guides
             .iter()
             .take(20)
@@ -176,6 +189,8 @@ impl KimiClient {
         ai_prompt: &str,
         scores: &[GuideScoreRecord],
     ) -> Result<f64, String> {
+        self.ensure_sufficient_balance().await?;
+
         let score_context = scores
             .iter()
             .map(|entry| {
@@ -226,6 +241,71 @@ impl KimiClient {
 
         let payload = format!("{prefix}{completion}");
         parse_score_payload(&payload)
+    }
+
+    async fn ensure_sufficient_balance(&self) -> Result<(), String> {
+        let available_balance = self.fetch_available_balance().await?;
+        if available_balance < MINIMUM_AVAILABLE_BALANCE_CNY {
+            return Err("余额不足，暂停AI服务".to_string());
+        }
+
+        Ok(())
+    }
+
+    async fn fetch_available_balance(&self) -> Result<f64, String> {
+        if let Some(snapshot) = self
+            .balance_cache
+            .read()
+            .map_err(|_| "failed to read Kimi balance cache".to_string())?
+            .clone()
+            .filter(|snapshot| snapshot.checked_at.elapsed() < BALANCE_CACHE_TTL)
+        {
+            return Ok(snapshot.available_balance);
+        }
+
+        let endpoint = format!("{}/users/me/balance", self.base_url);
+        let response = self
+            .http
+            .get(&endpoint)
+            .bearer_auth(&self.api_key)
+            .send()
+            .await
+            .map_err(|error| classify_transport_error(&error, &endpoint))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "failed to read error body".to_string());
+            return Err(format!("Kimi balance request failed with {status}: {body}"));
+        }
+
+        let payload: Value = response
+            .json()
+            .await
+            .map_err(|error| format!("failed to parse Kimi balance response: {error}"))?;
+
+        let available_balance = payload
+            .get("data")
+            .and_then(|data| data.get("available_balance"))
+            .and_then(Value::as_f64)
+            .ok_or_else(|| {
+                format!(
+                    "Kimi balance response did not include data.available_balance: {}",
+                    compact_json(&payload)
+                )
+            })?;
+
+        let snapshot = BalanceSnapshot {
+            available_balance,
+            checked_at: Instant::now(),
+        };
+        if let Ok(mut cache) = self.balance_cache.write() {
+            *cache = Some(snapshot);
+        }
+
+        Ok(available_balance)
     }
 
     async fn chat_completion(&self, request: ChatCompletionRequest) -> Result<String, String> {
