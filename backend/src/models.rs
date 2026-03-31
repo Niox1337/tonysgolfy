@@ -280,15 +280,37 @@ pub struct ScoreInput {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ImportedScoreInput {
+    pub guide_id: Option<String>,
+    pub course_code: Option<String>,
+    pub course_name: Option<String>,
+    pub judge_name: Option<String>,
+    pub score: f32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SubmitScoresRequest {
     pub judge_name: String,
     pub scores: Vec<ScoreInput>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportScoresRequest {
+    pub scores: Vec<ImportedScoreInput>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitScoresResponse {
     pub submitted: usize,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportScoresResponse {
+    pub inserted: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -308,6 +330,12 @@ pub struct GuideScoreRecord {
 pub struct GuideScoreListResponse {
     pub guide_id: String,
     pub course_name: String,
+    pub scores: Vec<GuideScoreRecord>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScoreListResponse {
     pub scores: Vec<GuideScoreRecord>,
 }
 

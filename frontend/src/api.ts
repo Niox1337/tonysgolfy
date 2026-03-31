@@ -93,6 +93,14 @@ export type ScoreSubmission = {
   score: number
 }
 
+export type ScoreImportInput = {
+  guideId?: string
+  courseCode?: string
+  courseName?: string
+  judgeName?: string
+  score: number
+}
+
 export type GuideScoreRecord = {
   id: string
   guideId: string
@@ -302,10 +310,34 @@ export async function submitScores(input: { judgeName: string; scores: ScoreSubm
   })
 }
 
+export async function listScores() {
+  return requestJson<{ scores: GuideScoreRecord[] }>('/api/scores')
+}
+
+export async function importScores(scores: ScoreImportInput[]) {
+  return requestJson<{ inserted: number }>('/api/scores/import', {
+    method: 'POST',
+    body: JSON.stringify({ scores }),
+  })
+}
+
 export async function listGuideScores(guideId: string) {
   return requestJson<{ guideId: string; courseName: string; scores: GuideScoreRecord[] }>(
     `/api/scores/by-guide?guideId=${encodeURIComponent(guideId)}`,
   )
+}
+
+export async function downloadScoresCsv() {
+  const response = await fetch('/api/scores/export.csv', {
+    credentials: 'same-origin',
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { error?: string } | null
+    throw new ApiError(response.status, payload?.error ?? '导出失败。')
+  }
+
+  return response.blob()
 }
 
 export async function calculateCompositeScore(input: {

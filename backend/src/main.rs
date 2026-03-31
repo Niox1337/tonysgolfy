@@ -31,8 +31,9 @@ use models::{
     CalculateCompositeScoreResponse, ChangePasswordRequest, CreateUserRequest, DeleteMailRequest,
     DeleteMailResponse, GenerateGuideRequest, GenerateGuideResponse, GuideInput, GuideListResponse,
     GuideScoresQuery, GuideScoreListResponse, GuidesQuery, HealthResponse, ImportRequest,
-    LoginRequest, MailQuery, MailboxResponse, SaveDraftRequest, SendMailRequest, SessionResponse,
-    SubmitScoresRequest, SubmitScoresResponse, UpdateUserRequest,
+    ImportScoresRequest, ImportScoresResponse, LoginRequest, MailQuery, MailboxResponse,
+    SaveDraftRequest, ScoreListResponse, SendMailRequest, SessionResponse, SubmitScoresRequest,
+    SubmitScoresResponse, UpdateUserRequest,
 };
 use python_semantic::rank_guides;
 use score::{ScoreEntryWrite, ScoreService};
@@ -84,7 +85,9 @@ async fn main() {
         .route("/api/mail/send", post(send_mail))
         .route("/api/mail/draft", post(save_draft))
         .route("/api/mail/delete", post(delete_mail))
-        .route("/api/scores", post(submit_scores))
+        .route("/api/scores", get(list_scores).post(submit_scores))
+        .route("/api/scores/import", post(import_scores))
+        .route("/api/scores/export.csv", get(export_scores))
         .route("/api/scores/by-guide", get(list_scores_for_guide))
         .route("/api/guides/composite-score", post(calculate_composite_score))
         .route("/api/users", get(list_users).post(create_user))
@@ -267,6 +270,7 @@ async fn submit_scores(
             resolved.push(ScoreEntryWrite {
                 guide_id: guide.id,
                 course_name: guide.course_name,
+                judge_name: judge_name.clone(),
                 score: entry.score,
             });
         }
@@ -276,10 +280,68 @@ async fn submit_scores(
 
     let submitted = state
         .scores
-        .submit_scores(&user, &judge_name, &resolved_scores)
+        .submit_scores(&user, &resolved_scores)
         .map_err(bad_request)?;
 
     Ok(Json(SubmitScoresResponse { submitted }))
+}
+
+async fn list_scores(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Json<ScoreListResponse>> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let scores = state.scores.list_scores().map_err(internal_error_from)?;
+    Ok(Json(ScoreListResponse { scores }))
+}
+
+async fn import_scores(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ImportScoresRequest>,
+) -> AppResult<Json<ImportScoresResponse>> {
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if request.scores.is_empty() {
+        return Err(bad_request("至少需要导入一条评分。".to_string()));
+    }
+
+    let resolved_scores = {
+        let store = state
+            .store
+            .read()
+            .map_err(|_| internal_error("failed to read guide store"))?;
+        let guides = store.all();
+        let mut resolved = Vec::with_capacity(request.scores.len());
+
+        for (index, entry) in request.scores.into_iter().enumerate() {
+            let guide = resolve_import_score_guide(&guides, &entry, index + 1)?;
+            let judge_name = if matches!(user.role, models::UserRole::Judge) {
+                user.name.clone()
+            } else {
+                entry.judge_name.unwrap_or_default().trim().to_string()
+            };
+
+            if judge_name.is_empty() {
+                return Err(bad_request(format!("第 {} 行缺少评委姓名。", index + 1)));
+            }
+
+            resolved.push(ScoreEntryWrite {
+                guide_id: guide.id,
+                course_name: guide.course_name,
+                judge_name,
+                score: entry.score,
+            });
+        }
+
+        resolved
+    };
+
+    let inserted = state
+        .scores
+        .submit_scores(&user, &resolved_scores)
+        .map_err(bad_request)?;
+
+    Ok(Json(ImportScoresResponse { inserted }))
 }
 
 async fn list_scores_for_guide(
@@ -296,6 +358,61 @@ async fn list_scores_for_guide(
         .list_scores_for_guide(&query.guide_id)
         .map_err(internal_error_from)?;
     Ok(Json(response))
+}
+
+async fn export_scores(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> AppResult<Response> {
+    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let scores = state.scores.list_scores().map_err(internal_error_from)?;
+
+    let mut writer = csv::Writer::from_writer(Vec::new());
+    writer
+        .write_record([
+            "id",
+            "guideId",
+            "courseName",
+            "judgeName",
+            "operatorName",
+            "score",
+            "createdAt",
+        ])
+        .map_err(|error| internal_error_from(error.to_string()))?;
+
+    for score in scores {
+        writer
+            .write_record([
+                score.id,
+                score.guide_id,
+                score.course_name,
+                score.judge_name,
+                score.operator_name,
+                score.score.to_string(),
+                score.created_at,
+            ])
+            .map_err(|error| internal_error_from(error.to_string()))?;
+    }
+
+    let csv = String::from_utf8(
+        writer
+            .into_inner()
+            .map_err(|error| error.to_string())
+            .map_err(internal_error_from)?,
+    )
+    .map_err(|error| internal_error_from(error.to_string()))?;
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    headers.insert(
+        CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=\"tonysgolfy-scores.csv\""),
+    );
+
+    Ok((headers, csv).into_response())
 }
 
 async fn calculate_composite_score(
@@ -681,6 +798,60 @@ fn bind_addr() -> String {
     let host = env::var("APP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
     let port = env::var("APP_PORT").unwrap_or_else(|_| "3000".to_string());
     format!("{host}:{port}")
+}
+
+fn resolve_import_score_guide(
+    guides: &[models::GuideRecord],
+    entry: &models::ImportedScoreInput,
+    row_number: usize,
+) -> AppResult<models::GuideRecord> {
+    if let Some(guide_id) = entry.guide_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        return guides
+            .iter()
+            .find(|guide| guide.id == guide_id)
+            .cloned()
+            .ok_or_else(|| bad_request(format!("第 {} 行引用了不存在的 guideId。", row_number)));
+    }
+
+    if let Some(course_code) = entry
+        .course_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return guides
+            .iter()
+            .find(|guide| guide.course_code.eq_ignore_ascii_case(course_code))
+            .cloned()
+            .ok_or_else(|| bad_request(format!("第 {} 行引用了不存在的球场代号。", row_number)));
+    }
+
+    if let Some(course_name) = entry
+        .course_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let matches = guides
+            .iter()
+            .filter(|guide| guide.course_name.eq_ignore_ascii_case(course_name))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        return match matches.as_slice() {
+            [guide] => Ok(guide.clone()),
+            [] => Err(bad_request(format!("第 {} 行引用了不存在的球场名称。", row_number))),
+            _ => Err(bad_request(format!(
+                "第 {} 行的球场名称匹配到多条记录，请改用球场代号导入。",
+                row_number
+            ))),
+        };
+    }
+
+    Err(bad_request(format!(
+        "第 {} 行至少需要提供 guideId、球场代号或球场名称之一。",
+        row_number
+    )))
 }
 
 fn bad_request(message: String) -> AppError {

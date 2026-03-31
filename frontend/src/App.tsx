@@ -10,11 +10,14 @@ import {
   deactivateUser,
   deleteGuides,
   downloadGuidesCsv,
+  downloadScoresCsv,
   generateGuide,
   getSession,
+  importScores,
   importGuides,
   listGuideScores,
   listMailbox,
+  listScores,
   listDuplicateGroups,
   listGuides,
   listUsers,
@@ -67,6 +70,7 @@ import {
   toFormState,
   toGuideInput,
 } from './modules/guides/utils'
+import { convertRowsToScoreImports } from './modules/scores/utils'
 import { UserManagementPage } from './modules/users/components/UserManagementPage'
 import './App.css'
 
@@ -1071,6 +1075,96 @@ function App() {
     }
   }
 
+  async function handleImportScores(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (!file) return
+
+    try {
+      setScoreError('')
+      setScoreSuccess('')
+      let imported = []
+
+      if (file.name.toLowerCase().endsWith('.csv')) {
+        const text = await file.text()
+        const [headers, ...lines] = parseCsv(text)
+        const rows = lines.map((line) =>
+          Object.fromEntries(headers.map((header, index) => [header, line[index] ?? ''])),
+        )
+        imported = convertRowsToScoreImports(rows)
+      } else if (file.name.toLowerCase().endsWith('.xlsx') || file.name.toLowerCase().endsWith('.xls')) {
+        if (!window.XLSX) {
+          throw new Error('Excel 解析器尚未就绪，请刷新页面后重试。')
+        }
+
+        const buffer = await file.arrayBuffer()
+        const workbook = window.XLSX.read(buffer, { type: 'array' })
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]]
+        const rows = window.XLSX.utils.sheet_to_json(firstSheet, { defval: '' })
+        imported = convertRowsToScoreImports(rows)
+      } else {
+        throw new Error('仅支持 CSV、XLSX 或 XLS 文件。')
+      }
+
+      if (imported.length === 0) {
+        throw new Error('没有找到可导入的评分数据。')
+      }
+
+      const response = await importScores(imported)
+      setScoreSuccess(`已导入 ${response.inserted} 条球场评分。`)
+      event.target.value = ''
+    } catch (error) {
+      setScoreError(error instanceof Error ? error.message : '导入评分失败。')
+      event.target.value = ''
+    }
+  }
+
+  async function handleExportScoresCsv() {
+    try {
+      setScoreError('')
+      setScoreSuccess('')
+      const blob = await downloadScoresCsv()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `tonysgolfy-scores-${new Date().toISOString().slice(0, 10)}.csv`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      setScoreError(error instanceof Error ? error.message : '导出评分失败。')
+    }
+  }
+
+  async function handleExportScoresExcel() {
+    try {
+      setScoreError('')
+      setScoreSuccess('')
+
+      if (!window.XLSX) {
+        throw new Error('Excel 导出组件尚未就绪，请刷新页面后重试。')
+      }
+
+      const response = await listScores()
+      const workbook = window.XLSX.utils.book_new()
+      const rows = response.scores.map((score) => ({
+        id: score.id,
+        guideId: score.guideId,
+        courseName: score.courseName,
+        judgeName: score.judgeName,
+        operatorName: score.operatorName,
+        score: score.score,
+        createdAt: score.createdAt,
+      }))
+      const sheet = window.XLSX.utils.json_to_sheet(rows)
+      window.XLSX.utils.book_append_sheet(workbook, sheet, 'Scores')
+      window.XLSX.writeFile(
+        workbook,
+        `tonysgolfy-scores-${new Date().toISOString().slice(0, 10)}.xlsx`,
+      )
+    } catch (error) {
+      setScoreError(error instanceof Error ? error.message : '导出 Excel 失败。')
+    }
+  }
+
   function updateGuideCaches(updatedGuide: GuideRecord) {
     setAllRecords((current) => current.map((guide) => (guide.id === updatedGuide.id ? updatedGuide : guide)))
     setRecords((current) => current.map((guide) => (guide.id === updatedGuide.id ? updatedGuide : guide)))
@@ -1273,6 +1367,9 @@ function App() {
             successMessage={scoreSuccess}
             isSubmitting={isSubmittingScores}
             onJudgeNameChange={setScoreJudgeName}
+            onImport={handleImportScores}
+            onExportCsv={handleExportScoresCsv}
+            onExportExcel={handleExportScoresExcel}
             onAddRow={handleAddScoreRow}
             onRemoveRow={handleRemoveScoreRow}
             onChooseGuide={handleChooseScoreGuide}

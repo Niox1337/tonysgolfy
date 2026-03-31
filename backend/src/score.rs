@@ -17,6 +17,7 @@ pub struct ScoreService {
 pub struct ScoreEntryWrite {
     pub guide_id: String,
     pub course_name: String,
+    pub judge_name: String,
     pub score: f32,
 }
 
@@ -39,13 +40,8 @@ impl ScoreService {
     pub fn submit_scores(
         &self,
         user: &SessionUser,
-        judge_name: &str,
         scores: &[ScoreEntryWrite],
     ) -> Result<usize, String> {
-        let judge_name = judge_name.trim();
-        if judge_name.is_empty() {
-            return Err("评委姓名不能为空。".to_string());
-        }
         if scores.is_empty() {
             return Err("至少需要提交一条球场评分。".to_string());
         }
@@ -55,6 +51,10 @@ impl ScoreService {
         let created_at = Utc::now().to_rfc3339();
 
         for entry in scores {
+            let judge_name = entry.judge_name.trim();
+            if judge_name.is_empty() {
+                return Err("评委姓名不能为空。".to_string());
+            }
             if entry.guide_id.trim().is_empty() {
                 return Err("球场不能为空。".to_string());
             }
@@ -84,6 +84,43 @@ impl ScoreService {
 
         transaction.commit().map_err(|error| error.to_string())?;
         Ok(scores.len())
+    }
+
+    pub fn list_scores(&self) -> Result<Vec<GuideScoreRecord>, String> {
+        let connection = self.open_connection()?;
+        let mut statement = connection
+            .prepare(
+                "
+                SELECT
+                    scores.id,
+                    scores.guide_id,
+                    scores.course_name,
+                    scores.judge_name,
+                    COALESCE(users.name, '未知操作人') AS operator_name,
+                    scores.score,
+                    scores.created_at
+                FROM judge_scores AS scores
+                LEFT JOIN users ON users.id = scores.submitted_by_user_id
+                ORDER BY scores.created_at DESC, scores.rowid DESC
+                ",
+            )
+            .map_err(|error| error.to_string())?;
+
+        statement
+            .query_map([], |row| {
+                Ok(GuideScoreRecord {
+                    id: row.get(0)?,
+                    guide_id: row.get(1)?,
+                    course_name: row.get(2)?,
+                    judge_name: row.get(3)?,
+                    operator_name: row.get(4)?,
+                    score: row.get(5)?,
+                    created_at: row.get(6)?,
+                })
+            })
+            .map_err(|error| error.to_string())?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string())
     }
 
     pub fn list_scores_for_guide(&self, guide_id: &str) -> Result<GuideScoreListResponse, String> {
