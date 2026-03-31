@@ -157,7 +157,6 @@
   transition:
     transform 220ms ease,
     opacity 220ms ease;
-  animation: rise-in 600ms ease;
 }
 
 .hero-panel.is-open {
