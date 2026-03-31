@@ -288,7 +288,10 @@ async fn list_scores_for_guide(
     headers: HeaderMap,
     Query(query): Query<GuideScoresQuery>,
 ) -> AppResult<Json<GuideScoreListResponse>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号只能进入球场评分页面。".to_string()));
+    }
     let response = state
         .scores
         .list_scores_for_guide(&query.guide_id)
@@ -301,7 +304,10 @@ async fn calculate_composite_score(
     headers: HeaderMap,
     Json(request): Json<CalculateCompositeScoreRequest>,
 ) -> AppResult<Json<CalculateCompositeScoreResponse>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号只能进入球场评分页面。".to_string()));
+    }
 
     let selected = state
         .scores
@@ -451,7 +457,10 @@ async fn list_guides(
     headers: HeaderMap,
     Query(query): Query<GuidesQuery>,
 ) -> AppResult<Json<GuideListResponse>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号只能进入球场评分页面。".to_string()));
+    }
     let store = state
         .store
         .read()
@@ -467,7 +476,10 @@ async fn get_guide(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> AppResult<Json<models::GuideRecord>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号只能进入球场评分页面。".to_string()));
+    }
     let store = state
         .store
         .read()
@@ -486,7 +498,10 @@ async fn create_guide(
     headers: HeaderMap,
     Json(input): Json<GuideInput>,
 ) -> AppResult<(StatusCode, Json<models::GuideRecord>)> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号不能修改球场数据。".to_string()));
+    }
     let mut store = state
         .store
         .write()
@@ -502,7 +517,10 @@ async fn update_guide(
     Path(id): Path<String>,
     Json(input): Json<GuideInput>,
 ) -> AppResult<Json<models::GuideRecord>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号不能修改球场数据。".to_string()));
+    }
     let mut store = state
         .store
         .write()
@@ -524,7 +542,10 @@ async fn bulk_delete_guides(
     headers: HeaderMap,
     Json(request): Json<BulkDeleteRequest>,
 ) -> AppResult<Json<BulkDeleteResponse>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号不能删除球场数据。".to_string()));
+    }
     let mut store = state
         .store
         .write()
@@ -541,7 +562,10 @@ async fn preview_duplicates(
     headers: HeaderMap,
     Json(input): Json<GuideInput>,
 ) -> AppResult<Json<Vec<models::DuplicatePreviewMatch>>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号不能访问球场编辑功能。".to_string()));
+    }
     let store = state
         .store
         .read()
@@ -554,7 +578,10 @@ async fn list_duplicate_groups(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> AppResult<Json<Vec<models::DuplicateGroup>>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号不能访问球场编辑功能。".to_string()));
+    }
     let store = state
         .store
         .read()
@@ -567,7 +594,10 @@ async fn import_guides(
     headers: HeaderMap,
     Json(request): Json<ImportRequest>,
 ) -> AppResult<Json<models::ImportResponse>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号不能导入球场数据。".to_string()));
+    }
     let mut store = state
         .store
         .write()
@@ -581,7 +611,10 @@ async fn generate_travel_guide(
     headers: HeaderMap,
     Json(request): Json<GenerateGuideRequest>,
 ) -> AppResult<Json<GenerateGuideResponse>> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号不能访问球场攻略工作台。".to_string()));
+    }
     let query = GuidesQuery {
         search: request.search,
         search_mode: request.search_mode,
@@ -608,7 +641,10 @@ async fn export_guides(
     headers: HeaderMap,
     Query(query): Query<GuidesQuery>,
 ) -> AppResult<Response> {
-    state.auth.require_user(&headers).map_err(unauthorized)?;
+    let user = state.auth.require_user(&headers).map_err(unauthorized)?;
+    if matches!(user.role, models::UserRole::Judge) {
+        return Err(forbidden("评委账号不能导出球场数据。".to_string()));
+    }
     let store = state
         .store
         .read()

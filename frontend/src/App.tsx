@@ -163,6 +163,7 @@ function App() {
   const deferredSearchTerm = useDeferredValue(searchTerm)
   const isAuthenticated = sessionUser !== null
   const isAdmin = sessionUser?.role === 'admin'
+  const isJudge = sessionUser?.role === 'judge'
   const canUseMail = sessionUser?.role === 'employee' || sessionUser?.role === 'admin'
 
   useEffect(() => {
@@ -246,7 +247,7 @@ function App() {
     }
 
     if (currentRoute === LOGIN_ROUTE) {
-      navigateTo(TABLE_ROUTE, true)
+      navigateTo(isJudge ? SCORES_ROUTE : TABLE_ROUTE, true)
       return
     }
 
@@ -257,8 +258,13 @@ function App() {
 
     if (currentRoute === MAIL_ROUTE && !canUseMail) {
       navigateTo(TABLE_ROUTE, true)
+      return
     }
-  }, [canUseMail, currentRoute, isAdmin, isAuthenticated, isCheckingSession])
+
+    if (isJudge && currentRoute !== SCORES_ROUTE) {
+      navigateTo(SCORES_ROUTE, true)
+    }
+  }, [canUseMail, currentRoute, isAdmin, isAuthenticated, isCheckingSession, isJudge])
 
   useEffect(() => {
     if (

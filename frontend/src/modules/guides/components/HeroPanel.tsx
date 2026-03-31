@@ -47,19 +47,23 @@ export function HeroPanel({
       </div>
 
       <div className="hero-actions hero-nav">
-        <button className={currentRoute === 'table' ? 'primary' : 'ghost'} type="button" onClick={onOpenTable}>
-          球场攻略
-        </button>
         <button className={currentRoute === 'scores' ? 'primary' : 'ghost'} type="button" onClick={onOpenScores}>
           球场评分
         </button>
-        <button
-          className={currentRoute === 'composite' ? 'primary' : 'ghost'}
-          type="button"
-          onClick={onOpenComposite}
-        >
-          计算评分
-        </button>
+        {currentUserRole !== 'judge' ? (
+          <button className={currentRoute === 'table' ? 'primary' : 'ghost'} type="button" onClick={onOpenTable}>
+            球场攻略
+          </button>
+        ) : null}
+        {currentUserRole !== 'judge' ? (
+          <button
+            className={currentRoute === 'composite' ? 'primary' : 'ghost'}
+            type="button"
+            onClick={onOpenComposite}
+          >
+            计算评分
+          </button>
+        ) : null}
         {currentUserRole !== 'judge' ? (
           <button className={currentRoute === 'mail' ? 'primary' : 'ghost'} type="button" onClick={onOpenMail}>
             邮箱
